@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QUARRY // Mission Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+<!-- ===================== JOIN: profile -> avatar -> role -> team -> drop ===================== -->
+<div id="join-overlay" class="join-overlay">
+  <div class="join-card">
+    <div class="brand-mark" style="font-size:32px;">◈</div>
+    <h1>QUARRY</h1>
+    <p>Build your profile, then drop into the hunt.</p>
+
+    <input type="text" id="join-name" placeholder="Callsign" maxlength="24" autocomplete="off">
+
+    <div class="avatar-label">PICK YOUR MARK</div>
+    <div id="avatar-grid" class="avatar-grid"></div>
+
+    <div class="role-choice">
+      <button type="button" class="role-btn selected" data-role="spectator">
+        <strong>SPECTATOR</strong>
+        <small>Watch any UGV's feed, vote on sightings, chat.</small>
+      </button>
+      <button type="button" class="role-btn" data-role="field_agent">
+        <strong>FIELD AGENT</strong>
+        <small>Your own robot patrols your space. You keep full control, always.</small>
+      </button>
+    </div>
+
+    <div class="avatar-label">PICK YOUR TEAM</div>
+    <div class="team-choice">
+      <button type="button" class="team-btn selected" data-team="Alpha">TEAM ALPHA</button>
+      <button type="button" class="team-btn" data-team="Bravo">TEAM BRAVO</button>
+    </div>
+
+    <input type="text" id="join-location" placeholder="Your location (e.g. Berlin, DE)" class="hidden">
+    <div id="join-error" class="join-error hidden"></div>
+    <button id="join-btn">DROP IN</button>
+  </div>
+</div>
+
+<!-- ===================== DROP SEQUENCE ===================== -->
+<div id="drop-overlay" class="join-overlay hidden">
+  <div class="drop-card">
+    <div id="drop-avatar" class="drop-avatar"></div>
+    <div id="drop-name" class="drop-name"></div>
+    <div id="drop-team" class="drop-team"></div>
+    <div id="drop-count" class="drop-count">3</div>
+    <div class="drop-status">DEPLOYING TO MISSION CONTROL…</div>
+  </div>
+</div>
+
+<!-- ===================== MAIN HUD (one screen, no tabs) ===================== -->
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">◈</span>
+    <span class="brand-name">QUARRY</span>
+    <span class="brand-sub">MISSION CONTROL</span>
+  </div>
+  <div id="me-badge" class="me-badge hidden"></div>
+  <div class="link-status">
+    <span class="status-dot" id="link-dot"></span>
+    <span id="link-label">CONNECTING…</span>
+  </div>
+  <div class="clock" id="clock">--:--:--</div>
+</header>
+
+<div class="hud-grid">
+
+  <!-- LEFT: teams + squad + activity -->
+  <aside class="hud-col hud-left">
+    <div class="panel">
+      <h2>Team Scores</h2>
+      <div id="team-scores" class="team-scores"></div>
+    </div>
+    <div class="panel squad-panel">
+      <h2>Squad <span class="dim" id="squad-count">(0)</span></h2>
+      <div id="squad-list" class="squad-list-full"></div>
+    </div>
+    <div class="panel activity-panel">
+      <h2>Activity</h2>
+      <div id="activity-feed" class="activity-feed"></div>
+    </div>
+  </aside>
+
+  <!-- CENTER: arena map + focused live feed, always both visible -->
+  <main class="hud-col hud-center">
+    <div class="panel arena-panel">
+      <h2>Arena <span class="dim">— click a marker to follow that feed</span></h2>
+      <div id="arena-container"></div>
+    </div>
+    <div class="panel feed-panel">
+      <div class="feed-header">
+        <h2 id="feed-title">Live Feed — select a site</h2>
+        <span id="feed-watchers" class="feed-watchers"></span>
+      </div>
+      <div id="feed-video" class="feed-video">Click a marker on the Arena above</div>
+      <div id="feed-telemetry" class="feed-telemetry"></div>
+    </div>
+  </main>
+
+  <!-- RIGHT: sightings/vote + chat -->
+  <aside class="hud-col hud-right">
+    <div class="panel sightings-panel">
+      <h2>Active Sightings <span class="dim">— vote to confirm</span></h2>
+      <ul id="sightings-list" class="sightings-list">
+        <li class="empty">No pending sightings.</li>
+      </ul>
+    </div>
+    <div class="panel chat-panel">
+      <h2>Team Chat</h2>
+      <div id="chat-log" class="chat-log"></div>
+      <form id="chat-form" class="chat-form">
+        <input type="text" id="chat-input" placeholder="Message the squad…" maxlength="280" autocomplete="off">
+        <button type="submit">SEND</button>
+      </form>
+    </div>
+  </aside>
+
+</div>
+
+<div id="toast-stack" class="toast-stack"></div>
+
+<script src="/js/arena.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>
