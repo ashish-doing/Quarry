@@ -172,9 +172,9 @@ class RealRobotState:
         if self.twin is None:
             return None
         try:
-            return self.twin.get_latest_frame()
+            return self.twin.get_frame('numpy', source='remote_edge')
         except Exception as exc:  # noqa: BLE001
-            logger.debug("get_latest_frame failed (%s)", exc)
+            logger.debug("get_frame failed (%s)", exc)
             return None
 
     @staticmethod
