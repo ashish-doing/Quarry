@@ -64,6 +64,13 @@ DETECTION_COOLDOWN_S = 4.0   # don't re-raise the same label+waypoint faster tha
 CONFIRM_THRESHOLD = 2
 DEFAULT_DURATION = 180
 TELEMETRY_TICK_S = 0.2       # tighter than mock_feed's 0.6s -- real vision needs it
+TWIN_SYNC_INTERVAL_S = 2.0   # how often to push position to the Cyberwave platform's own
+                              # digital-twin view via set_pose(). NOTE: set_pose()'s own
+                              # docstring says "stub in PR3" as of this SDK version -- this
+                              # is wired and called, but VERIFY in the Cyberwave platform UI
+                              # that the twin actually visibly moves before claiming this
+                              # works anywhere. If it doesn't move, this is a documented
+                              # attempt against a real method, not a confirmed working feature
 
 SMOOTHING_WINDOW = 5          # consider the last 5 detection ticks at a waypoint
 SMOOTHING_MIN_HITS = 3        # a label must appear in >=3 of the last 5 to be trusted --
@@ -127,6 +134,7 @@ class RealRobotState:
         self._speed = 0.0
         self._battery = 100.0
         self._fps = 0.0
+        self._last_twin_sync = 0.0
 
     def _reset_round_state(self):
         self.registered_targets = []
@@ -184,6 +192,19 @@ class RealRobotState:
         # session_start/end) -- not a readable battery/fps snapshot. Battery
         # and FPS stay unavailable until we find the real consumer-side method
         # (likely t.subscribe_position()/listen() per dir(t) -- untested).
+
+        # Push position to Cyberwave's own digital-twin view. Confirmed via
+        # `python -m backend.diagnose_twin` that set_pose(x=, y=, ...) is a
+        # real method on the twin -- yaw is deliberately omitted, same reason
+        # heading is never guessed elsewhere in this file. Throttled to avoid
+        # flooding MQTT with a write every 0.2s tick.
+        now = time.monotonic()
+        if now - self._last_twin_sync >= TWIN_SYNC_INTERVAL_S:
+            self._last_twin_sync = now
+            try:
+                self.twin.set_pose(x=self._position["x"], y=self._position["y"])
+            except Exception as exc:  # noqa: BLE001 -- a failed sync must not break telemetry
+                logger.debug("twin.set_pose failed (%s) -- platform twin view may be stale", exc)
 
     def position(self):
         return self._position
