@@ -30,6 +30,8 @@ import cv2
 import websockets
 from dotenv import load_dotenv
 
+from backend.vision.collision_guard import CollisionGuard
+
 from backend import real_feed
 
 import logging
@@ -101,6 +103,19 @@ async def run(hub_url: str, name: str, location: str, team: str):
             print(f"Hub rejected join: {init.get('reason')}")
             return
         print("Joined Hub session.")
+
+        # Collision guard was previously only started inside real_feed.py's
+        # telemetry_loop(), which the multi-site path never calls -- the
+        # emergency stop has never actually run during a real site_agent.py
+        # session. Started here instead, now that a ws connection exists
+        # to report alerts through.
+        def _on_collision_event(event: dict):
+            asyncio.create_task(ws.send(json.dumps({
+                "type": "safety_event", "event": event["type"], "timestamp": event["timestamp"],
+            })))
+
+        guard = CollisionGuard(real_feed.state.twin, real_feed.state.detector, on_event=_on_collision_event)
+        asyncio.create_task(guard.run())
 
         # listen for Hub broadcasts in the background (votes, chat, etc.)
         # -- this agent doesn't need to act on them, just not let the

@@ -43,6 +43,7 @@ Server -> Client:
   {"type": "rate_limited", "action"}
   {"type": "followers_update", "site_id", "followers"}
   {"type": "targets_update", "targets"}
+  {"type": "collision_alert"|"collision_clear", "site_id", "timestamp"}
   {"type": "site_removed", "site_id"}
 
 Client -> Server:
@@ -54,6 +55,7 @@ Client -> Server:
   {"type": "ping", "site_id", "waypoint", "text"}
   {"type": "chat", "text"}
   {"type": "follow", "site_id"}   (spectators only -- which feed they're watching)
+  {"type": "safety_event", "event" ("collision_alert"|"collision_clear"), "timestamp"}  (field agent only)
 """
 
 import json
@@ -323,6 +325,16 @@ async def ws_endpoint(websocket: WebSocket):
                 hub.sites[player.site_id].candidates[candidate.id] = candidate
                 await broadcast(candidate.to_dict())
                 continue
+
+            if msg_type == "safety_event" and player.role == "field_agent" and player.site_id:
+                event = msg.get("event")
+                if event not in ("collision_alert", "collision_clear"):
+                    continue
+                await broadcast({
+                    "type": event, "site_id": player.site_id,
+                    "timestamp": msg.get("timestamp", time.time()),
+                })
+                continue    
 
             # -- rate-limited actions available to everyone ---------------
             if msg_type in ("vote", "ping", "chat") and player.rate_limited():

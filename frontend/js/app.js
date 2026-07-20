@@ -397,6 +397,23 @@ function connect() {
         renderChatMessage(msg);
         break;
 
+      case "collision_alert":
+        renderActivity({
+          text: `⚠ SAFETY STOP — ${sites[msg.site_id]?.owner || "a"} robot stopped, object too close`,
+          kind: "danger",
+          timestamp: new Date(msg.timestamp * 1000).toISOString(),
+        });
+        toast("SAFETY STOP triggered", "warn");
+        break;
+
+      case "collision_clear":
+        renderActivity({
+          text: `✓ SAFETY — ${sites[msg.site_id]?.owner || "a"} robot re-armed, path clear`,
+          kind: "info",
+          timestamp: new Date(msg.timestamp * 1000).toISOString(),
+        });
+        break;
+
       case "rate_limited":
         toast("Slow down — rate limited.", "warn");
         break;

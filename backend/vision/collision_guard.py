@@ -56,7 +56,7 @@ class CollisionGuard:
                 continue
 
             try:
-                frame = self.twin.get_latest_frame()
+                frame = self.twin.get_frame('numpy', source='remote_edge')
             except Exception as exc:  # noqa: BLE001 -- a bad read must not kill this loop
                 logger.debug("collision guard: frame read failed (%s)", exc)
                 continue
