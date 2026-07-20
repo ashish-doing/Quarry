@@ -297,16 +297,17 @@ class RealRobotState:
             self.leaderboard[name] = self.leaderboard.get(name, 0) + 1
         del self.candidates[candidate.id]
 
-    def register_target(self, name: str, note: str = "", photo: Optional[np.ndarray] = None):
-        """photo, if given, must already be a decoded HxWx3 numpy array
-        (see the main.py patch note -- decode the upload with cv2.imdecode
-        before calling this)."""
+    def register_target(self, name: str, note: str = "", photos: Optional[list] = None):
+        """photos, if given, must be a list of already-decoded HxWx3 numpy
+        arrays (decode uploads with cv2.imdecode before calling this).
+        Register from 3-5 angles for real re-id robustness -- a single
+        photo still works but is the weaker case."""
         self.registered_targets.append({"name": name, "note": note})
-        if photo is not None:
-            self.matcher.register(name, photo)
+        if photos:
+            self.matcher.register(name, photos)
         else:
             logger.warning(
-                "Target '%s' registered without a photo -- it can only be confirmed "
+                "Target '%s' registered without any photos -- it can only be confirmed "
                 "by manual team voting, never auto-matched by appearance.", name,
             )
 

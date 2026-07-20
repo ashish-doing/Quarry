@@ -15,7 +15,7 @@ Usage:
 """
 
 import logging
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -27,7 +27,7 @@ MATCH_THRESHOLD = 0.62  # cosine similarity -- tune against real captures, don't
 class TargetMatcher:
     def __init__(self, backend: str = "osnet"):
         self.backend = backend
-        self._embeddings: Dict[str, np.ndarray] = {}
+        self._embeddings: Dict[str, List[np.ndarray]] = {}  # name -> gallery of embeddings
         self._extractor = None
         self._load_backend()
 
@@ -71,21 +71,37 @@ class TargetMatcher:
             logger.error("Embedding extraction failed: %s", exc)
             return None
 
-    def register(self, name: str, image: np.ndarray):
-        vec = self._embed(image)
-        if vec is not None:
-            self._embeddings[name] = vec
-            logger.info("Registered target '%s' with a %d-dim embedding", name, vec.shape[0])
+    def register(self, name: str, images):
+        """images: a single HxWx3 array, or a list of them. Register from
+        3-5 angles for real re-id robustness (see the perception hardening
+        notes) -- one photo still works but is the weaker case. Each valid
+        photo adds one embedding to that target's gallery. Matching takes
+        the BEST similarity across the whole gallery, not an average --
+        averaging would blur away the exact appearance variation that
+        makes multi-angle registration worth doing in the first place."""
+        if isinstance(images, np.ndarray):
+            images = [images]
+        gallery = self._embeddings.setdefault(name, [])
+        added = 0
+        for image in images:
+            vec = self._embed(image)
+            if vec is not None:
+                gallery.append(vec)
+                added += 1
+        if added:
+            logger.info("Registered target '%s' with %d/%d new embedding(s), gallery size now %d",
+                        name, added, len(images), len(gallery))
         else:
             logger.warning(
-                "Target '%s' registered WITHOUT an embedding (backend unavailable or bad "
-                "photo) -- it can only be confirmed by manual team voting, never "
+                "Target '%s' registered WITHOUT any embeddings (backend unavailable or all "
+                "photos bad) -- it can only be confirmed by manual team voting, never "
                 "auto-matched by appearance.", name,
             )
 
     def best_match(self, crop: np.ndarray) -> Tuple[Optional[str], float]:
         """Returns (best_matching_name, score) if score clears
-        MATCH_THRESHOLD, else (None, best_score_seen)."""
+        MATCH_THRESHOLD, else (None, best_score_seen). Score against a
+        target is the max similarity across its whole photo gallery."""
         if not self._embeddings:
             return None, 0.0
         vec = self._embed(crop)
@@ -93,8 +109,10 @@ class TargetMatcher:
             return None, 0.0
 
         best_name, best_score = None, -1.0
-        for name, ref in self._embeddings.items():
-            score = float(np.dot(vec, ref))
+        for name, gallery in self._embeddings.items():
+            if not gallery:
+                continue
+            score = max(float(np.dot(vec, ref)) for ref in gallery)
             if score > best_score:
                 best_name, best_score = name, score
 

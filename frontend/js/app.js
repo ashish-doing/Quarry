@@ -12,6 +12,7 @@ let players = [];
 let followingSiteId = null;
 let openSightings = new Map();
 let arenaReady = false;
+let targets = {};
 
 // ---------------------------------------------------------------------
 // Clock
@@ -284,6 +285,67 @@ function renderSightings() {
 }
 
 // ---------------------------------------------------------------------
+// Target registration
+// ---------------------------------------------------------------------
+const LOCAL_REGISTER_ENDPOINT = "http://127.0.0.1:8099/register-target";
+// Same same-machine-only caveat as LOCAL_FRAME_SERVER -- only reaches a
+// site_agent.py running on THIS browser's machine. The Hub call below
+// (name/note/points) always works for everyone; the local call only
+// matters if you're the Field Agent whose own robot should learn this
+// target's appearance.
+
+$("register-target-btn").addEventListener("click", () => {
+  $("register-modal").classList.remove("hidden");
+});
+$("register-cancel-btn").addEventListener("click", () => {
+  $("register-modal").classList.add("hidden");
+});
+
+$("register-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = $("register-name").value.trim();
+  const note = $("register-note").value.trim();
+  const points = parseInt($("register-points").value, 10) || 100;
+  const files = $("register-photos").files;
+  const statusEl = $("register-status");
+  if (!name) { $("register-name").focus(); return; }
+
+  statusEl.textContent = "Registering…";
+  try {
+    const hubForm = new FormData();
+    hubForm.append("name", name);
+    hubForm.append("note", note);
+    hubForm.append("points", points);
+    const hubRes = await fetch("/api/targets", { method: "POST", body: hubForm });
+    if (!hubRes.ok) throw new Error("Hub registration failed");
+
+    let photoMsg = "";
+    if (files.length > 0) {
+      const localForm = new FormData();
+      localForm.append("name", name);
+      localForm.append("note", note);
+      for (const f of files) localForm.append("photos", f);
+      try {
+        const localRes = await fetch(LOCAL_REGISTER_ENDPOINT, { method: "POST", body: localForm });
+        const localData = await localRes.json();
+        photoMsg = localRes.ok
+          ? ` — ${localData.photos_used} photo(s) registered for local matching`
+          : ` — local registration failed: ${localData.error || "unknown error"}`;
+      } catch {
+        photoMsg = " — no local site_agent.py reachable here, name/points only registered";
+      }
+    }
+
+    statusEl.textContent = `"${name}" registered${photoMsg}`;
+    toast(`Target registered: ${name}`, "match");
+    $("register-form").reset();
+    setTimeout(() => $("register-modal").classList.add("hidden"), 1800);
+  } catch (err) {
+    statusEl.textContent = `Registration failed: ${err.message}`;
+  }
+});
+
+// ---------------------------------------------------------------------
 // Chat
 // ---------------------------------------------------------------------
 function renderChatMessage(msg) {
@@ -322,6 +384,7 @@ function connect() {
       case "init":
         sites = msg.sites || {};
         players = msg.players || [];
+        targets = msg.targets || {};
         myPlayerId = msg.your_player_id;
         renderSquad();
         renderTeamScores(msg.team_scores || []);
@@ -412,6 +475,10 @@ function connect() {
           kind: "info",
           timestamp: new Date(msg.timestamp * 1000).toISOString(),
         });
+        break;
+
+      case "targets_update":
+        targets = msg.targets || {};
         break;
 
       case "rate_limited":

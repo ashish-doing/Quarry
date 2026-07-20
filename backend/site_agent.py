@@ -21,12 +21,14 @@ Requires: pip install websockets
 
 import argparse
 import asyncio
+import cgi
 import json
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import cv2
+import numpy as np
 import websockets
 from dotenv import load_dotenv
 
@@ -74,6 +76,64 @@ class _FrameHandler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+
+    def do_POST(self):
+        if self.path.startswith("/register-target"):
+            self._handle_register_target()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def _handle_register_target(self):
+        """Local-only target registration for THIS Field Agent's own
+        matcher -- same same-machine-only pattern as /latest.jpg. Photos
+        are decoded here and handed to real_feed.state.register_target(),
+        which is otherwise never called by anything in the current
+        codebase -- registering a name/points on the shared Hub via
+        /api/targets does NOT feed this; the two are separate concerns
+        by design (shared scoring metadata vs. local CV matching)."""
+        try:
+            environ = {"REQUEST_METHOD": "POST"}
+            if self.headers.get("Content-Type"):
+                environ["CONTENT_TYPE"] = self.headers["Content-Type"]
+            form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ=environ)
+
+            name = (form.getvalue("name") or "").strip()
+            note = form.getvalue("note") or ""
+            if not name:
+                self._json_response(400, {"error": "name required"})
+                return
+
+            photo_fields = form["photos"] if "photos" in form else []
+            if not isinstance(photo_fields, list):
+                photo_fields = [photo_fields]
+
+            decoded = []
+            for field in photo_fields:
+                data = field.file.read() if hasattr(field, "file") and field.file else None
+                if not data:
+                    continue
+                arr = np.frombuffer(data, dtype=np.uint8)
+                img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if img is not None:
+                    decoded.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+
+            if not decoded:
+                self._json_response(400, {"error": "no valid photos received"})
+                return
+
+            real_feed.state.register_target(name, note, photos=decoded)
+            self._json_response(200, {"status": "registered", "name": name, "photos_used": len(decoded)})
+        except Exception as exc:  # noqa: BLE001 -- a bad upload must not kill the frame server
+            self._json_response(500, {"error": str(exc)})
+
+    def _json_response(self, code: int, payload: dict):
+        body = json.dumps(payload).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
 
     def log_message(self, format, *args):  # noqa: A002 -- silence default request logging spam
         pass
