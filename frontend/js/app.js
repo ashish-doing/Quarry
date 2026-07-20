@@ -263,7 +263,7 @@ function renderSightings() {
       <span class="sighting-site">${owner}'s site</span>
       <div class="sighting-header">
         <span>${data.label}${data.is_registered_target ? " ★" : ""} @ ${data.waypoint}</span>
-        <span class="conf">${(data.confidence * 100).toFixed(0)}%</span>
+        <span class="conf">${(data.confidence * 100).toFixed(0)}% avg<span class="conf-instant"> (${((data.instant_confidence ?? data.confidence) * 100).toFixed(0)}% now)</span></span>
       </div>
       <div class="sighting-actions">
         <button class="btn-confirm" data-id="${id}" data-site="${data.site_id}" data-vote="confirm" ${myVote === "confirm" ? "disabled" : ""}>CONFIRM</button>

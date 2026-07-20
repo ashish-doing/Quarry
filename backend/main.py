@@ -33,7 +33,7 @@ Server -> Client:
   {"type": "activity", "text", "kind", "timestamp"}
   {"type": "site_update", "site_id", "telemetry"}
   {"type": "candidate", "site_id", "id", "label", "confidence",
-   "waypoint", "is_registered_target", "timestamp"}
+   "instant_confidence", "waypoint", "is_registered_target", "timestamp"}
   {"type": "vote_update", "site_id", "id", "confirms", "disputes"}
   {"type": "match_confirmed", "site_id", "id", "label", "confidence",
    "waypoint", "timestamp", "contributors", "points"}
@@ -50,7 +50,7 @@ Client -> Server:
   {"type": "join", "name", "role" ("field_agent"|"spectator"), "team"
    ("Alpha"|"Bravo"), "location" (field_agent only), "avatar"}
   {"type": "site_report", "waypoints", "telemetry"}         (field agent's own site_agent.py only)
-  {"type": "candidate_report", "label", "confidence", "waypoint", "is_registered_target"}  (field agent only)
+  {"type": "candidate_report", "label", "confidence", "instant_confidence", "waypoint", "is_registered_target"}  (field agent only)
   {"type": "vote", "site_id", "id", "vote"}
   {"type": "ping", "site_id", "waypoint", "text"}
   {"type": "chat", "text"}
@@ -103,11 +103,12 @@ def _arena_position(site_id: str):
 
 
 class Candidate:
-    def __init__(self, label, confidence, waypoint, is_registered_target, site_id):
+    def __init__(self, label, confidence, waypoint, is_registered_target, site_id, instant_confidence=None):
         self.id = str(uuid.uuid4())[:8]
         self.site_id = site_id
         self.label = label
         self.confidence = confidence
+        self.instant_confidence = confidence if instant_confidence is None else instant_confidence
         self.waypoint = waypoint
         self.is_registered_target = is_registered_target
         self.timestamp = datetime.now(timezone.utc).isoformat()
@@ -127,7 +128,8 @@ class Candidate:
     def to_dict(self):
         return {
             "type": "candidate", "site_id": self.site_id, "id": self.id, "label": self.label,
-            "confidence": self.confidence, "waypoint": self.waypoint,
+            "confidence": self.confidence, "instant_confidence": self.instant_confidence,
+            "waypoint": self.waypoint,
             "is_registered_target": self.is_registered_target, "timestamp": self.timestamp,
         }
 
@@ -321,6 +323,7 @@ async def ws_endpoint(websocket: WebSocket):
                 candidate = Candidate(
                     msg.get("label"), msg.get("confidence"), msg.get("waypoint"),
                     msg.get("is_registered_target", False), site_id=player.site_id,
+                    instant_confidence=msg.get("instant_confidence"),
                 )
                 hub.sites[player.site_id].candidates[candidate.id] = candidate
                 await broadcast(candidate.to_dict())

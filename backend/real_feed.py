@@ -29,10 +29,12 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
+from collections import deque
+
 import numpy as np
 
 import cyberwave
-from backend.mock_feed import Candidate  # reuse the exact same shape/contract
+from backend.mock_feed import Candidate as _BaseCandidate
 from backend.vision.detector import YoloeDetector
 from backend.vision.reid import TargetMatcher
 from backend.vision.collision_guard import CollisionGuard
@@ -63,6 +65,30 @@ CONFIRM_THRESHOLD = 2
 DEFAULT_DURATION = 180
 TELEMETRY_TICK_S = 0.2       # tighter than mock_feed's 0.6s -- real vision needs it
 
+SMOOTHING_WINDOW = 5          # consider the last 5 detection ticks at a waypoint
+SMOOTHING_MIN_HITS = 3        # a label must appear in >=3 of the last 5 to be trusted --
+                               # a lightweight, ByteTrack-family stand-in for a real tracker;
+                               # single-frame detections are a fluke risk, don't raise on one
+CONFIDENCE_EMA_ALPHA = 0.35   # exponential-moving-average weight for the rolling confidence shown
+                               # alongside the raw single-frame number in the sightings panel
+
+class Candidate(_BaseCandidate):
+    """Extends mock_feed.Candidate with instant_confidence -- purely
+    additive to the WebSocket contract. `confidence` (inherited) is now
+    the EMA-smoothed rolling value used for gating/scoring; this field
+    is the raw single-frame reading, kept only for display so the
+    sightings panel can show both, per the perception hardening plan.
+    Older frontend code that doesn't know this field exists just
+    ignores it -- same as any other unrecognized dict key."""
+
+    def __init__(self, label, confidence, waypoint, is_registered_target, instant_confidence=None):
+        super().__init__(label, confidence, waypoint, is_registered_target)
+        self.instant_confidence = confidence if instant_confidence is None else instant_confidence
+
+    def to_dict(self):
+        d = super().to_dict()
+        d["instant_confidence"] = self.instant_confidence
+        return d
 
 def _nearest_waypoint(x: float, y: float) -> Optional[str]:
     best_id, best_dist = None, WAYPOINT_SNAP_RADIUS
@@ -93,6 +119,8 @@ class RealRobotState:
         self.bounty_log = []
         self.leaderboard = {}
         self._last_candidate_at = {}  # (label, waypoint) -> monotonic time, cooldown tracking
+        self._label_history: deque = deque(maxlen=SMOOTHING_WINDOW)
+        self._rolling_confidence: dict = {}  # label -> EMA confidence
 
         self._position = {"x": 0.0, "y": 0.0}
         self._heading = 0.0
@@ -106,6 +134,8 @@ class RealRobotState:
         self.bounty_log = []
         self.leaderboard = {}
         self._last_candidate_at = {}
+        self._label_history.clear()
+        self._rolling_confidence = {}
 
     def connect(self):
         if "CYBERWAVE_API_KEY" not in os.environ:
@@ -183,35 +213,62 @@ class RealRobotState:
         x1, y1, x2, y2 = bbox
         return frame[int(y1 * h):int(y2 * h), int(x1 * w):int(x2 * w)]
 
-    def maybe_raise_candidate(self) -> Optional[Candidate]:
+    def _update_smoothing(self, detections):
+        """Feed one tick's detections into the rolling tracker. Returns
+        (stable_label, best_detection) once that label has cleared the
+        majority-vote threshold across the recent window, else (None, None)
+        -- meaning "seen, but not consistently enough yet to trust."""
+        best = max(detections, key=lambda d: d.confidence) if detections else None
+        self._label_history.append(best.label if best else None)
+
+        if best is None:
+            return None, None
+
+        prev = self._rolling_confidence.get(best.label, best.confidence)
+        self._rolling_confidence[best.label] = (
+            CONFIDENCE_EMA_ALPHA * best.confidence + (1 - CONFIDENCE_EMA_ALPHA) * prev
+        )
+
+        hits = sum(1 for lbl in self._label_history if lbl == best.label)
+        if hits >= SMOOTHING_MIN_HITS:
+            return best.label, best
+        return None, None
+
+    def maybe_raise_candidate(self, frame=None, detections=None) -> Optional[Candidate]:
         wp_id = self.current_waypoint_id()
         if not wp_id or not self.detector.available:
             return None
 
-        frame = self._capture_frame()
-        if frame is None:
-            return None
+        # Accept a pre-captured frame + pre-computed detections so callers
+        # (site_agent.py's video overlay) can share one capture+detect per
+        # tick instead of each doing their own -- was a real, flagged
+        # redundancy: three independent frame pulls per tick otherwise.
+        if frame is None or detections is None:
+            frame = self._capture_frame()
+            if frame is None:
+                return None
+            detections = self.detector.detect(frame)
 
-        detections = self.detector.detect(frame)
-        if not detections:
-            return None
+        stable_label, best = self._update_smoothing(detections)
+        if stable_label is None:
+            return None  # nothing seen, or seen but not consistently enough yet
 
-        best = max(detections, key=lambda d: d.confidence)
-
-        key = (best.label, wp_id)
+        key = (stable_label, wp_id)
         now = time.monotonic()
         if now - self._last_candidate_at.get(key, 0) < DETECTION_COOLDOWN_S:
             return None  # cooldown -- don't spam a candidate every single frame
         self._last_candidate_at[key] = now
 
-        label, is_registered = best.label, False
+        label, is_registered = stable_label, False
         if self.matcher.available and self.registered_targets:
             crop = self._crop(frame, best.bbox)
             match_name, _score = self.matcher.best_match(crop)
             if match_name:
                 label, is_registered = match_name, True
 
-        candidate = Candidate(label, round(best.confidence, 2), wp_id, is_registered)
+        rolling_conf = round(self._rolling_confidence.get(stable_label, best.confidence), 2)
+        candidate = Candidate(label, rolling_conf, wp_id, is_registered,
+                               instant_confidence=round(best.confidence, 2))
         self.candidates[candidate.id] = candidate
         return candidate
 

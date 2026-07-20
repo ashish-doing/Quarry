@@ -145,7 +145,10 @@ async def run(hub_url: str, name: str, location: str, team: str):
             # waypoint/cooldown gating that maybe_raise_candidate() uses
             # for scoring -- you should see boxes regardless of whether
             # a "candidate" is currently being raised for points.
+            # One capture + one detect() per tick, shared between the video
+            # overlay and candidate scoring below -- previously ran twice.
             frame = real_feed.state._capture_frame()
+            detections = []
             if frame is not None and real_feed.state.detector.available:
                 frame = real_feed.state.detector.normalize_frame(frame)
                 if frame is not None:
@@ -157,19 +160,13 @@ async def run(hub_url: str, name: str, location: str, team: str):
                         global _latest_jpeg
                         _latest_jpeg = buf.tobytes()
 
-            # NOTE: maybe_raise_candidate() below does its own separate
-            # frame capture + detect() call internally -- so detection is
-            # currently running twice per tick (once here for the visual
-            # overlay, once there for candidate scoring). Correctness over
-            # efficiency for this first working pass; worth refactoring to
-            # share one detection result if this becomes a performance
-            # problem on the RTX 4050.
-            candidate = real_feed.state.maybe_raise_candidate()
+            candidate = real_feed.state.maybe_raise_candidate(frame=frame, detections=detections)
             if candidate:
                 await ws.send(json.dumps({
                     "type": "candidate_report",
                     "label": candidate.label,
                     "confidence": candidate.confidence,
+                    "instant_confidence": candidate.instant_confidence,
                     "waypoint": candidate.waypoint,
                     "is_registered_target": candidate.is_registered_target,
                 }))
