@@ -45,18 +45,45 @@ FRAME_SERVER_PORT = 8099
 _latest_jpeg = None  # shared between the detection loop and the HTTP thread
 
 
+# One fixed, high-contrast color per label so different object types are
+# instantly distinguishable in the live feed, instead of everything being
+# the same green. BGR tuples (OpenCV convention, not RGB). Cycles by hash
+# if a label isn't in this explicit map, so new vocabulary entries still
+# get a stable, distinct-ish color without needing a manual update here.
+_LABEL_COLORS = {
+    "person":    (0, 0, 255),     # red -- highest-attention label
+    "clothing":  (128, 128, 128), # gray -- deliberately dull, the "false alarm" label
+    "backpack":  (0, 255, 255),   # yellow
+    "bag":       (0, 200, 255),   # orange-yellow
+    "box":       (255, 128, 0),   # blue-ish
+    "toolbox":   (255, 0, 128),   # purple-ish
+    "chair":     (0, 255, 0),     # green
+}
+_FALLBACK_PALETTE = [
+    (255, 0, 0), (0, 128, 255), (255, 0, 255), (128, 255, 0),
+    (0, 200, 200), (200, 200, 0), (180, 0, 180),
+]
+
+
+def _color_for_label(label: str):
+    if label in _LABEL_COLORS:
+        return _LABEL_COLORS[label]
+    return _FALLBACK_PALETTE[hash(label) % len(_FALLBACK_PALETTE)]
+
+
 def _draw_detections(frame, detections):
-    """Draw a box + label/confidence per detection, same visual language
-    as any standard object-detection demo (green box, label above)."""
+    """Draw a box + label/confidence per detection, one distinct color per
+    label so different object types are easy to tell apart at a glance."""
     annotated = frame.copy()
     h, w = annotated.shape[:2]
     for det in detections:
         x1, y1, x2, y2 = det.bbox
         x1, y1, x2, y2 = int(x1 * w), int(y1 * h), int(x2 * w), int(y2 * h)
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        color = _color_for_label(det.label)
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
         label = f"{det.label} {det.confidence:.2f}"
         cv2.putText(annotated, label, (x1, max(y1 - 8, 12)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
     return annotated
 
 

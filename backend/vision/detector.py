@@ -42,7 +42,39 @@ class Detection:
 
 
 class YoloeDetector:
-    DEFAULT_VOCABULARY = ["person", "backpack", "chair", "toolbox", "box", "bag"]
+    # Expanded from the original 6-word list to a broad, generic set covering
+    # most things you'd realistically encounter indoors -- this is NOT truly
+    # unconstrained open-vocabulary (that would need a different "-pf" prompt-
+    # free checkpoint, unverified against this project's weights, not guessed
+    # here) but it's wide enough that "detects almost anything real" holds up
+    # in practice. "clothing" is deliberately included: without it, a
+    # person-shaped silhouette (e.g. clothes draped on a chair) has no
+    # competing label to be matched against and defaults to "person" --
+    # confirmed as a real false-positive case during testing.
+    DEFAULT_VOCABULARY = [
+        "person", "clothing",
+        "backpack", "bag", "suitcase", "box", "toolbox",
+        "chair", "table", "sofa", "bed", "pillow", "blanket",
+        "laptop", "phone", "keyboard", "mouse", "monitor", "remote control",
+        "bottle", "cup", "mug", "plate", "bowl",
+        "book", "notebook", "pen",
+        "shoe", "hat", "jacket", "umbrella",
+        "plant", "lamp", "clock", "mirror",
+        "bicycle", "helmet",
+        "ball", "toy",
+        "cat", "dog",
+    ]
+
+    # Per-label confidence floors, applied on top of the global threshold
+    # below. "person" is deliberately stricter -- it's the label most worth
+    # getting right, and the one most prone to false triggers from
+    # person-shaped-but-not-a-person silhouettes (clothes on furniture, etc).
+    # Not a distance measurement (there isn't one from a single RGB frame,
+    # same honesty note as CollisionGuard's proximity check) -- this is a
+    # confidence floor, which correlates with distance/clarity but isn't it.
+    CONFIDENCE_OVERRIDES = {
+        "person": 0.65,
+    }
 
     def __init__(
         self,
@@ -56,6 +88,9 @@ class YoloeDetector:
         self.device = device
         self.model = None
         self._load(weights)
+
+    def _min_confidence_for(self, label: str) -> float:
+        return self.CONFIDENCE_OVERRIDES.get(label, self.confidence_threshold)
 
     def _load(self, weights: str):
         try:
@@ -105,8 +140,14 @@ class YoloeDetector:
             return []
 
         try:
+            # Run inference at the LOWEST threshold we'd ever accept (across
+            # all overrides), then filter per-label below -- letting the
+            # model itself pre-filter at a single global conf would silently
+            # drop borderline "person" detections we actually want to see
+            # and reject, rather than just never receiving.
+            lowest_conf = min([self.confidence_threshold, *self.CONFIDENCE_OVERRIDES.values()])
             results = self.model.predict(
-                frame, device=self.device, verbose=False, conf=self.confidence_threshold
+                frame, device=self.device, verbose=False, conf=lowest_conf
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("YOLOE inference failed: %s", exc)
@@ -123,6 +164,8 @@ class YoloeDetector:
                 cls_id = int(box.cls[0])
                 label = names.get(cls_id, str(cls_id)) if isinstance(names, dict) else str(cls_id)
                 conf = float(box.conf[0])
+                if conf < self._min_confidence_for(label):
+                    continue  # below this label's own confidence floor
                 x1, y1, x2, y2 = [float(v) for v in box.xyxy[0]]
                 detections.append(Detection(label, conf, (x1 / w, y1 / h, x2 / w, y2 / h)))
         return detections
