@@ -450,7 +450,10 @@ async def get_state():
     return hub.snapshot()
 
 
-app.mount("/css", StaticFiles(directory=FRONTEND_DIR / "css"), name="css")
+# /css mount removed -- style.css was deleted when index.html/dashboard.html
+# moved to inline <style> blocks, so frontend/css no longer exists.
+# /js mount kept -- map3d.js still lives there (unused but not yet removed,
+# per earlier decision to hold off deleting it).
 app.mount("/js", StaticFiles(directory=FRONTEND_DIR / "js"), name="js")
 
 
