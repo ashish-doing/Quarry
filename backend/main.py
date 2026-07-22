@@ -230,6 +230,7 @@ class Hub:
             "chat_log": list(self.chat_log),
             "activity_log": list(self.activity_log),
             "targets": self.targets,
+            "bounty_log": self.bounty_log[:50],
         }
 
 
@@ -456,3 +457,7 @@ app.mount("/js", StaticFiles(directory=FRONTEND_DIR / "js"), name="js")
 @app.get("/")
 async def index():
     return FileResponse(FRONTEND_DIR / "index.html")
+
+@app.get("/dashboard")
+async def dashboard():
+    return FileResponse(FRONTEND_DIR / "dashboard.html")
