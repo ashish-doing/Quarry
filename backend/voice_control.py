@@ -45,6 +45,8 @@ trusting the transcription call live.
 
 import io
 import os
+import re
+import time
 
 import keyboard
 import numpy as np
@@ -89,26 +91,61 @@ def record_while_held(key="space"):
 
 
 def transcribe(audio_buf) -> str:
+    # `prompt` biases Whisper toward these words on short/ambiguous audio --
+    # reduces but does not eliminate misreads on short utterances like "back".
     result = groq_client.audio.transcriptions.create(
         file=audio_buf, model="whisper-large-v3", language="en",
+        prompt="forward, back, left, right, stop, halt, reverse, go",
     )
     return result.text.strip().lower()
 
 
+def _parse_commands(text: str):
+    """Splits a phrase like 'forward then right' into ['forward', 'right']
+    instead of only ever acting on the first keyword found. Segments on
+    common connector words/punctuation, then keyword-matches each segment
+    independently -- same substring approach as before, just applied per
+    segment instead of once to the whole phrase."""
+    segments = re.split(r"\bthen\b|\band\b|,", text)
+    commands = []
+    for seg in segments:
+        seg = seg.strip()
+        if not seg:
+            continue
+        if "stop" in seg or "halt" in seg:
+            commands.append("stop")
+        elif "forward" in seg or seg == "go":
+            commands.append("forward")
+        elif "back" in seg or "reverse" in seg:
+            commands.append("back")
+        elif "left" in seg:
+            commands.append("left")
+        elif "right" in seg:
+            commands.append("right")
+    return commands
+
+
 def execute(text: str, twin):
     print(f"Heard: '{text}'")
-    if "stop" in text or "halt" in text:
-        twin.publish_command("stop", {})
-    elif "forward" in text or text.strip() == "go":
-        twin.move_forward(distance=0.3, duration=1.5)
-    elif "back" in text or "reverse" in text:
-        twin.move_backward(distance=0.3, duration=1.5)
-    elif "left" in text:
-        twin.turn_left(0.5)
-    elif "right" in text:
-        twin.turn_right(0.5)
-    else:
+    commands = _parse_commands(text)
+    if not commands:
         print("  (not a recognized command, ignored)")
+        return
+
+    for i, cmd in enumerate(commands):
+        print(f"  -> {cmd}")
+        if cmd == "stop":
+            twin.publish_command("stop", {})
+        elif cmd == "forward":
+            twin.move_forward(distance=0.3, duration=1.5)
+        elif cmd == "back":
+            twin.move_backward(distance=0.3, duration=1.5)
+        elif cmd == "left":
+            twin.turn_left(0.5)
+        elif cmd == "right":
+            twin.turn_right(0.5)
+        if i < len(commands) - 1:
+            time.sleep(0.3)  # brief gap so chained bursts don't overlap/collide
 
 
 def main():

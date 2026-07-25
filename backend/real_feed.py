@@ -60,7 +60,11 @@ ENVIRONMENT_ID = os.environ.get("CYBERWAVE_ENVIRONMENT_ID", "9383b6b2-0df7-4e99-
 ASSET_KEY = "waveshare/ugv-beast"
 TWIN_NAME = "QUARRY"
 
-DETECTION_COOLDOWN_S = 4.0   # don't re-raise the same label+waypoint faster than this
+DETECTION_COOLDOWN_S = 25.0  # don't re-raise the same label+waypoint faster than this --
+                              # raised from 4.0: at 4s, a stationary object generated a
+                              # fresh candidate every cooldown window regardless of whether
+                              # the previous one had been voted on yet, flooding the
+                              # sightings panel (confirmed: 100+ in a 2-3 min session)
 CONFIRM_THRESHOLD = 2
 DEFAULT_DURATION = 180
 TELEMETRY_TICK_S = 0.2       # tighter than mock_feed's 0.6s -- real vision needs it
@@ -274,11 +278,24 @@ class RealRobotState:
         if stable_label is None:
             return None  # nothing seen, or seen but not consistently enough yet
 
+        # Don't raise a new candidate if one for this exact label+waypoint is
+        # already open and awaiting a vote -- the cooldown alone wasn't enough,
+        # since it only throttled *rate*, not duplicates. A pending sighting
+        # should get confirmed/disputed before a fresh one for the same object
+        # appears, otherwise a stationary target floods the panel indefinitely.
+        already_pending = any(
+            c.label == stable_label and c.waypoint == wp_id and c.status == "pending"
+            for c in self.candidates.values()
+        )
+        if already_pending:
+            return None
+
         key = (stable_label, wp_id)
         now = time.monotonic()
         if now - self._last_candidate_at.get(key, 0) < DETECTION_COOLDOWN_S:
             return None  # cooldown -- don't spam a candidate every single frame
         self._last_candidate_at[key] = now
+
 
         label, is_registered = stable_label, False
         if self.matcher.available and self.registered_targets:
