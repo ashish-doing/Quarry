@@ -39,6 +39,7 @@ import pygame
 from dotenv import load_dotenv
 
 import cyberwave
+from backend.vision.detector import YoloeDetector
 
 load_dotenv()
 
@@ -68,6 +69,17 @@ NORMAL_DISTANCE = 0.3
 DEADZONE = 0.25
 TICK_HZ = 10             # how often we sample the stick and send a command
 BURST_DURATION = 1.0 / TICK_HZ + 0.1  # slightly longer than tick so bursts overlap, no gaps
+
+# Proximity-based forward-block. Same bbox-area-as-distance-proxy approach as
+# CollisionGuard, and critically the SAME debounce pattern -- a single clear
+# frame does NOT re-arm forward movement. A naive per-tick check (capture one
+# frame, block or don't, based on that frame alone) lets exactly one flaky
+# clear read slip you straight back into an obstacle that's still there --
+# confirmed as a real live failure mode, not a hypothetical. Sampled every
+# tick regardless of drive intent, same as CollisionGuard's independent loop,
+# so the block state is never stale by the time you actually press forward.
+PROXIMITY_AREA_THRESHOLD = 0.30
+CLEAR_STREAK_REQUIRED = 4
 
 
 def calibrate():
@@ -143,9 +155,39 @@ def run():
     # you hold them down
     prev_buttons = {BUTTON_A: False, BUTTON_B: False, BUTTON_X: False, BUTTON_Y: False}
 
+    detector = YoloeDetector()
+    guard_blocked = False       # persistent -- survives across ticks, not re-derived fresh each check
+    guard_clear_streak = 0
+
     try:
         while True:
             pygame.event.pump()
+
+            # -- proximity guard: sampled every tick, independent of drive
+            # intent, so the block state is never stale by the time forward
+            # is actually attempted -----------------------------------------
+            try:
+                frame = twin.get_frame('numpy', source='remote_edge')
+                frame = detector.normalize_frame(frame)
+            except Exception:  # noqa: BLE001 -- a bad read must not crash driving
+                frame = None
+
+            if frame is not None and detector.available:
+                detections = detector.detect(frame)
+                nearest_area = max(
+                    ((d.bbox[2] - d.bbox[0]) * (d.bbox[3] - d.bbox[1]) for d in detections),
+                    default=0.0,
+                )
+                if nearest_area >= PROXIMITY_AREA_THRESHOLD:
+                    guard_clear_streak = 0
+                    if not guard_blocked:
+                        guard_blocked = True
+                        print("[collision guard] BLOCKED -- obstacle too close, forward refused")
+                else:
+                    guard_clear_streak += 1
+                    if guard_blocked and guard_clear_streak >= CLEAR_STREAK_REQUIRED:
+                        guard_blocked = False
+                        print("[collision guard] path clear, forward re-armed")
 
             # -- one-shot buttons: fire only on the press edge --------------
             for btn, label, command in (
@@ -206,9 +248,13 @@ def run():
             distance = SPEED_BOOST_DISTANCE if js.get_axis(AXIS_R2) > 0 else NORMAL_DISTANCE
             if abs(fwd) >= abs(turn):
                 if fwd > 0:
-                    twin.move_forward(distance=distance, duration=BURST_DURATION)
+                    if guard_blocked:
+                        print("[collision guard] forward refused -- obstacle still too close")
+                        twin.publish_command("stop", {})
+                    else:
+                        twin.move_forward(distance=distance, duration=BURST_DURATION)
                 else:
-                    twin.move_backward(distance=distance, duration=BURST_DURATION)
+                    twin.move_backward(distance=distance, duration=BURST_DURATION)  # backing away always allowed
             else:
                 if turn > 0:
                     twin.turn_right(0.3)
