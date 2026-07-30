@@ -24,7 +24,10 @@ import asyncio
 import cgi
 import json
 import os
+import re
 import threading
+import time
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import cv2
@@ -86,6 +89,56 @@ def _draw_detections(frame, detections):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
     return annotated
 
+TRAINING_DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "training_data")
+PENDING_CROP_MAXLEN = 20  # not-yet-echoed-by-the-Hub crops kept in memory; old
+                           # unmatched entries just age out if a broadcast is lost
+
+
+def _slugify(name: str) -> str:
+    """Mirrors main.py's own _slugify exactly -- needed here so this process
+    can recognize which Hub broadcasts are about ITS OWN site, without
+    importing main.py's FastAPI app just for one string function."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "site"
+
+
+def _save_training_example(label: str, crop, outcome: str):
+    """outcome: 'confirmed' or 'disputed'. This is the data-flywheel itself:
+    every vote is a human-verified label. Nothing here trains anything --
+    this only accumulates a real, correctly-labeled dataset. Fine-tuning
+    OSNet's head on it is a deliberate follow-up, run once there's enough
+    real volume to make fine-tuning meaningful, not guessed against zero
+    data now."""
+    if crop is None or crop.size == 0:
+        return
+    folder = os.path.join(TRAINING_DATA_DIR, outcome, label)
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{int(time.time() * 1000)}.jpg")
+    try:
+        bgr = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(path, bgr)
+    except Exception as exc:  # noqa: BLE001 -- a bad save must never crash the relay loop
+        print(f"[training data] save failed: {exc}")
+        return
+    _update_stats(label, outcome)
+
+
+def _update_stats(label: str, outcome: str):
+    """Running confirm/dispute tally per label -- the closest thing this
+    project has to an evaluation metric, grounded in real live voting
+    instead of an offline benchmark."""
+    os.makedirs(TRAINING_DATA_DIR, exist_ok=True)
+    stats_path = os.path.join(TRAINING_DATA_DIR, "stats.json")
+    stats = {}
+    if os.path.exists(stats_path):
+        try:
+            with open(stats_path) as f:
+                stats = json.load(f)
+        except Exception:  # noqa: BLE001 -- a corrupt stats file must not crash the loop
+            stats = {}
+    entry = stats.setdefault(label, {"confirmed": 0, "disputed": 0})
+    entry[outcome] = entry.get(outcome, 0) + 1
+    with open(stats_path, "w") as f:
+        json.dump(stats, f, indent=2)
 
 class _FrameHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -196,6 +249,10 @@ async def run(hub_url: str, name: str, location: str, team: str):
         # emergency stop has never actually run during a real site_agent.py
         # session. Started here instead, now that a ws connection exists
         # to report alerts through.
+        my_site_id = _slugify(name)
+        pending_crops = deque(maxlen=PENDING_CROP_MAXLEN)
+        hub_id_to_crop = {}  # Hub-assigned candidate id -> {"label", "crop"}
+
         def _on_collision_event(event: dict):
             asyncio.create_task(ws.send(json.dumps({
                 "type": "safety_event", "event": event["type"], "timestamp": event["timestamp"],
@@ -204,12 +261,31 @@ async def run(hub_url: str, name: str, location: str, team: str):
         guard = CollisionGuard(real_feed.state.twin, real_feed.state.detector, on_event=_on_collision_event)
         asyncio.create_task(guard.run())
 
-        # listen for Hub broadcasts in the background (votes, chat, etc.)
-        # -- this agent doesn't need to act on them, just not let the
-        # socket buffer block, so drain it concurrently with reporting.
+        # Now actively processes broadcasts (previously dropped everything) --
+        # correlates the Hub's own candidate id back to the crop THIS process
+        # raised, purely by matching (site_id, label, waypoint) against the
+        # pending queue. The Hub itself never sees or stores crop images.
         async def drain():
-            async for _raw in ws:
-                pass  # nothing to do locally with Hub broadcasts yet
+            async for raw in ws:
+                try:
+                    msg = json.loads(raw)
+                except Exception:  # noqa: BLE001
+                    continue
+
+                if msg.get("type") == "candidate" and msg.get("site_id") == my_site_id:
+                    for i, pending in enumerate(pending_crops):
+                        if pending["label"] == msg.get("label") and pending["waypoint"] == msg.get("waypoint"):
+                            hub_id_to_crop[msg["id"]] = pending
+                            del pending_crops[i]
+                            break
+
+                elif msg.get("type") == "match_confirmed" and msg.get("id") in hub_id_to_crop:
+                    entry = hub_id_to_crop.pop(msg["id"])
+                    _save_training_example(entry["label"], entry["crop"], "confirmed")
+
+                elif msg.get("type") == "match_rejected" and msg.get("id") in hub_id_to_crop:
+                    entry = hub_id_to_crop.pop(msg["id"])
+                    _save_training_example(entry["label"], entry["crop"], "disputed")
 
         asyncio.create_task(drain())
 
@@ -249,6 +325,11 @@ async def run(hub_url: str, name: str, location: str, team: str):
 
             candidate = real_feed.state.maybe_raise_candidate(frame=frame, detections=detections)
             if candidate:
+                crop = getattr(candidate, "training_crop", None)
+                if crop is not None:
+                    pending_crops.append({
+                        "label": candidate.label, "waypoint": candidate.waypoint, "crop": crop,
+                    })
                 await ws.send(json.dumps({
                     "type": "candidate_report",
                     "label": candidate.label,

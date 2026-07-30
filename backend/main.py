@@ -37,6 +37,7 @@ Server -> Client:
   {"type": "vote_update", "site_id", "id", "confirms", "disputes"}
   {"type": "match_confirmed", "site_id", "id", "label", "confidence",
    "waypoint", "timestamp", "contributors", "points"}
+   {"type": "match_rejected", "site_id", "id", "label", "waypoint", "timestamp"}
   {"type": "leaderboard", "entries", "team_scores"}
   {"type": "team_ping", "site_id", "player", "waypoint", "text", "timestamp"}
   {"type": "chat", "sender", "text", "timestamp"}
@@ -418,6 +419,24 @@ async def ws_endpoint(websocket: WebSocket):
                         f'TARGET CONFIRMED -- "{candidate.label}" @ {candidate.waypoint} '
                         f"({site.owner}'s site, Team {site.team}) by {', '.join(contributors)} -- +{points} pts",
                         "match",
+                    )
+                elif candidate.net_confirms() <= -CONFIRM_THRESHOLD:
+                    # Previously missing entirely -- a disputed candidate just sat
+                    # "pending" forever with no resolution. Symmetric to the confirm
+                    # threshold above. This is also the foundation for the ML
+                    # data-flywheel: a rejected sighting is a human-verified hard
+                    # negative, exactly as valuable as a confirmed one is a positive.
+                    candidate.status = "rejected"
+                    del site.candidates[candidate.id]
+                    await broadcast({
+                        "type": "match_rejected", "site_id": site_id, "id": candidate.id,
+                        "label": candidate.label, "waypoint": candidate.waypoint,
+                        "timestamp": candidate.timestamp,
+                    })
+                    await log_activity(
+                        f'Sighting disputed away -- "{candidate.label}" @ {candidate.waypoint} '
+                        f"({site.owner}'s site)",
+                        "info",
                     )
                 continue
 

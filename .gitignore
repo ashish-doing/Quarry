@@ -41,3 +41,6 @@ Thumbs.db
 # --- Node (if ever added to frontend tooling) ---
 node_modules/
 mobileclip_blt.ts
+
+# add:
+training_data/

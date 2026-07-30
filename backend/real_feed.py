@@ -297,9 +297,14 @@ class RealRobotState:
         self._last_candidate_at[key] = now
 
 
+        # Crop is now taken unconditionally, not just when matching against
+        # registered targets -- this is the raw material for the ML data
+        # flywheel below (site_agent.py saves it once the Hub confirms/rejects
+        # the sighting). Matching logic itself is unchanged.
+        crop = self._crop(frame, best.bbox)
+
         label, is_registered = stable_label, False
         if self.matcher.available and self.registered_targets:
-            crop = self._crop(frame, best.bbox)
             match_name, _score = self.matcher.best_match(crop)
             if match_name:
                 label, is_registered = match_name, True
@@ -307,6 +312,10 @@ class RealRobotState:
         rolling_conf = round(self._rolling_confidence.get(stable_label, best.confidence), 2)
         candidate = Candidate(label, rolling_conf, wp_id, is_registered,
                                instant_confidence=round(best.confidence, 2))
+        # training_crop is deliberately NOT part of Candidate.to_dict() / the
+        # WebSocket contract -- it's a same-process, local-only handoff to
+        # site_agent.py, never sent to the Hub or any spectator.
+        candidate.training_crop = crop
         self.candidates[candidate.id] = candidate
         return candidate
 

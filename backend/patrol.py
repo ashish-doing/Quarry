@@ -60,12 +60,18 @@ async def patrol_loop():
 
     turn_dir = 1
     last_waypoint = None
+    # Coverage tracking -- NOT path planning. Directed steering toward a
+    # specific unvisited waypoint needs real heading/yaw, which get_pose()'s
+    # quaternion has deliberately never been converted for (see real_feed.py's
+    # _refresh_telemetry comment -- guessing it wrong means confidently
+    # driving the wrong direction). This is the honest version: know what's
+    # been covered, report full-sweep completion, keep sweeping.
+    visited = set()
+    total_waypoints = len(real_feed.WAYPOINTS)
 
     try:
         while True:
             if guard.blocked:
-                # something's too close -- wait for it to clear rather
-                # than drive blind into whatever the guard just saw
                 await asyncio.sleep(0.5)
                 continue
 
@@ -77,14 +83,20 @@ async def patrol_loop():
 
             if wp and wp != last_waypoint:
                 last_waypoint = wp
-                print(f"Reached {wp} -- scanning...")
+                visited.add(wp)
+                print(f"Reached {wp} -- scanning... (coverage: {len(visited)}/{total_waypoints})")
                 scan_until = time.monotonic() + SCAN_PAUSE_S
                 while time.monotonic() < scan_until:
                     candidate = real_feed.state.maybe_raise_candidate()
                     if candidate:
                         print(f"  candidate: {candidate.label} ({candidate.confidence:.2f})")
                     await asyncio.sleep(0.3)
-                turn_dir *= -1  # alternate sweep direction after each waypoint
+
+                if len(visited) >= total_waypoints:
+                    print(f"Full sweep complete -- all {total_waypoints} waypoints covered. Resetting coverage.")
+                    visited.clear()
+
+                turn_dir *= -1
 
             if turn_dir > 0:
                 twin.turn_left(TURN_ANGLE)
