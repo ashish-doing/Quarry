@@ -42,18 +42,28 @@ from backend.vision.collision_guard import CollisionGuard
 logger = logging.getLogger("quarry.real_feed")
 
 # ---------------------------------------------------------------------------
-# PLACEHOLDER -- replace with real measured coordinates once AprilTags are
-# placed. Keep the same units/frame as get_pose() returns, and the same
-# frame the frontend's Three.js map already expects (see map3d.js).
+# Tag-to-waypoint mapping is now fixed (see apriltag_detector.py): tags
+# 0-5 map 1:1 to W1-W6, tags 6-7 are reserved as fixed origin/reference
+# markers used to establish the room's coordinate frame -- NOT waypoints
+# themselves. x/y below are STILL PLACEHOLDER until measure_waypoints.py
+# is run at the actual venue and the recorded tag positions are converted
+# into this same (x, y) frame. Keep the same units/frame as get_pose()
+# returns, and the same frame the frontend's Three.js map already expects
+# (see map3d.js) -- do not just paste measure_waypoints.py's raw output
+# here, that's in the CAMERA's frame relative to two reference tags, not
+# get_pose()'s frame. The conversion between those two frames is real
+# work that hasn't been done yet; measure_waypoints.py's README section
+# explains why it can't do that conversion for you automatically.
 # ---------------------------------------------------------------------------
 WAYPOINTS = [
-    {"id": "W1", "x": 15, "y": 20},
-    {"id": "W2", "x": 50, "y": 12},
-    {"id": "W3", "x": 85, "y": 25},
-    {"id": "W4", "x": 82, "y": 65},
-    {"id": "W5", "x": 48, "y": 80},
-    {"id": "W6", "x": 14, "y": 62},
+    {"id": "W1", "tag_id": 0, "x": 15, "y": 20},   # still placeholder -- see note above
+    {"id": "W2", "tag_id": 1, "x": 50, "y": 12},
+    {"id": "W3", "tag_id": 2, "x": 85, "y": 25},
+    {"id": "W4", "tag_id": 3, "x": 82, "y": 65},
+    {"id": "W5", "tag_id": 4, "x": 48, "y": 80},
+    {"id": "W6", "tag_id": 5, "x": 14, "y": 62},
 ]
+REFERENCE_TAG_IDS = (6, 7)  # fixed origin markers, not patrol waypoints -- place these FIRST at venue
 WAYPOINT_SNAP_RADIUS = 9999  # TEMP: testing detection only, ignore waypoint gating for now
 
 ENVIRONMENT_ID = os.environ.get("CYBERWAVE_ENVIRONMENT_ID", "9383b6b2-0df7-4e99-8d9e-8a352eb6e1ab")
