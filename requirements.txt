@@ -8,3 +8,4 @@ opencv-python
 numpy
 pupil-apriltags
 pytest-asyncio
+httpx
