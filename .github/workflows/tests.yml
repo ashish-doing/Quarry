@@ -23,12 +23,14 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio httpx
 
-      - name: Run Hub + safety-edge-case tests
+      - name: Run Hub contract script
         env:
-          # Hub tests use FastAPI's TestClient against in-process
-          # WebSocket connections -- no real Cyberwave/robot credentials
-          # needed. If any test starts requiring them, that's a sign
-          # it's testing the wrong layer (integration, not unit).
           CYBERWAVE_API_KEY: "ci-placeholder-not-used"
         run: |
-          python -m pytest backend/test_multisite.py backend/test_dispute_and_safety_edge_cases.py -v
+          python -m backend.test_multisite
+
+      - name: Run safety-edge-case tests (pytest)
+        env:
+          CYBERWAVE_API_KEY: "ci-placeholder-not-used"
+        run: |
+          python -m pytest backend/test_dispute_and_safety_edge_cases.py -v
