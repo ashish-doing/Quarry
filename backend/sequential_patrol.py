@@ -28,13 +28,18 @@ or the OSNet match step will never fire and every candidate will be
 raised as an unregistered generic detection instead of the intended
 sequential target.
 
+The pure geometry (vector math, heading angle, waypoint offset) lives
+in nav_math.py, not here -- kept separate specifically so it's
+unit-testable without importing real_feed.py's heavy dependency chain
+(cyberwave/YOLOE/OSNet). This module is the orchestration layer on top;
+see test_nav_math.py for the actual math coverage.
+
 Usage:
     python -m backend.sequential_patrol
 Ctrl+C to stop (sends a final stop command on exit).
 """
 
 import asyncio
-import math
 import time
 from typing import Optional, Tuple
 
@@ -44,6 +49,7 @@ from backend import real_feed
 from backend.vision.collision_guard import CollisionGuard
 from backend.objects_registry import load_objects, expected_number_for
 from backend.vision.ocr_check import MarkerOCR
+from backend.nav_math import vector_to, normalize, signed_angle_between, waypoint_xy, location_offset
 
 load_dotenv()
 
@@ -76,40 +82,14 @@ MAX_TICKS_PER_TARGET = 200     # hard ceiling so a stuck robot doesn't loop fore
                                # skipped-target log line, not a silent hang
 
 
-def _vector_to(from_xy: Tuple[float, float], to_xy: Tuple[float, float]) -> Tuple[float, float]:
-    return (to_xy[0] - from_xy[0], to_xy[1] - from_xy[1])
-
-
-def _normalize(v: Tuple[float, float]) -> Optional[Tuple[float, float]]:
-    mag = math.hypot(*v)
-    if mag < 1e-9:
-        return None
-    return (v[0] / mag, v[1] / mag)
-
-
-def _signed_angle_between(v1: Tuple[float, float], v2: Tuple[float, float]) -> float:
-    """Signed angle FROM v1 TO v2, in radians, positive = counter-clockwise
-    (turn left), negative = clockwise (turn right) -- standard atan2(cross,
-    dot) formulation, avoids the sign ambiguity a plain dot-product angle
-    would have."""
-    cross = v1[0] * v2[1] - v1[1] * v2[0]
-    dot = v1[0] * v2[0] + v1[1] * v2[1]
-    return math.atan2(cross, dot)
-
-
-def _waypoint_xy(waypoint_id: str) -> Optional[Tuple[float, float]]:
-    for wp in real_feed.WAYPOINTS:
-        if wp["id"] == waypoint_id:
-            return (wp["x"], wp["y"])
-    return None
-
-
 async def _drive_to_target(twin, guard: CollisionGuard, target_xy: Tuple[float, float],
                             heading_estimate: Optional[Tuple[float, float]]):
     """Runs control ticks until either arrival (returns the final,
     hopefully-updated heading_estimate) or MAX_TICKS_PER_TARGET is hit
     (returns None -- caller must treat this target as skipped, not stall
     the whole survey on one bad target)."""
+    import math
+
     for tick in range(MAX_TICKS_PER_TARGET):
         if guard.blocked:
             await asyncio.sleep(0.5)
@@ -129,8 +109,8 @@ async def _drive_to_target(twin, guard: CollisionGuard, target_xy: Tuple[float, 
             twin.move_forward(distance=BURST_DISTANCE * 0.5, duration=BOOTSTRAP_NUDGE_DURATION)
             await asyncio.sleep(BOOTSTRAP_NUDGE_DURATION + 0.3)
         else:
-            vector_to_target = _vector_to(pos_before_xy, target_xy)
-            angle_gap = _signed_angle_between(heading_estimate, vector_to_target)
+            target_vector = vector_to(pos_before_xy, target_xy)
+            angle_gap = signed_angle_between(heading_estimate, target_vector)
 
             if abs(angle_gap) > TURN_THRESHOLD:
                 if angle_gap > 0:
@@ -146,29 +126,14 @@ async def _drive_to_target(twin, guard: CollisionGuard, target_xy: Tuple[float, 
         pos_after = real_feed.state.position()
         pos_after_xy = (pos_after["x"], pos_after["y"])
 
-        delta = _vector_to(pos_before_xy, pos_after_xy)
+        delta = vector_to(pos_before_xy, pos_after_xy)
         if math.hypot(*delta) > MOVEMENT_NOISE_FLOOR:
-            measured_heading = _normalize(delta)
+            measured_heading = normalize(delta)
             if measured_heading is not None:
                 heading_estimate = measured_heading  # measured, never guessed
 
     print(f"  [WARN] target at {target_xy} not reached within {MAX_TICKS_PER_TARGET} ticks -- skipping")
     return None
-
-
-def _location_offset(waypoint_id: str) -> Optional[dict]:
-    """Waypoint + offset, per the master doc's locked location decision --
-    a cheap vector subtraction against the object's nearest known waypoint,
-    no live AprilTag dependency at runtime."""
-    wp_xy = _waypoint_xy(waypoint_id)
-    if wp_xy is None:
-        return None
-    pos = real_feed.state.position()
-    return {
-        "waypoint": waypoint_id,
-        "offset_x": round(pos["x"] - wp_xy[0], 3),
-        "offset_y": round(pos["y"] - wp_xy[1], 3),
-    }
 
 
 async def sequential_survey():
@@ -197,7 +162,7 @@ async def sequential_survey():
 
     try:
         for obj in objects:
-            target_xy = _waypoint_xy(obj.expected_waypoint)
+            target_xy = waypoint_xy(obj.expected_waypoint, real_feed.WAYPOINTS)
             if target_xy is None:
                 print(f"  [WARN] object-{obj.number}: expected_waypoint "
                       f"'{obj.expected_waypoint}' not found in WAYPOINTS -- skipping")
@@ -206,7 +171,7 @@ async def sequential_survey():
             print(f"\n--- Object {obj.number} ({obj.target_name}) -- "
                   f"heading to {obj.expected_waypoint} ---")
             heading_estimate = await _drive_to_target(twin, guard, target_xy, heading_estimate)
-            if heading_estimate is None and _waypoint_xy(obj.expected_waypoint) is not None:
+            if heading_estimate is None and waypoint_xy(obj.expected_waypoint, real_feed.WAYPOINTS) is not None:
                 continue  # _drive_to_target already logged the skip reason
 
             print(f"  Arrived near {obj.expected_waypoint} -- scanning for {SCAN_PAUSE_S}s...")
@@ -215,7 +180,7 @@ async def sequential_survey():
             while time.monotonic() < scan_until:
                 candidate = real_feed.state.maybe_raise_candidate()
                 if candidate:
-                    location = _location_offset(obj.expected_waypoint)
+                    location = location_offset(obj.expected_waypoint, real_feed.state.position(), real_feed.WAYPOINTS)
                     print(f"  candidate: {candidate.label} ({candidate.confidence:.2f}) "
                           f"registered={candidate.is_registered_target} location={location}")
 

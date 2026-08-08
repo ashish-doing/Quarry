@@ -40,6 +40,7 @@ from backend.vision.reid import TargetMatcher
 from backend.vision.collision_guard import CollisionGuard
 from backend.vision.ocr_check import MarkerOCR
 from backend.objects_registry import load_objects, expected_number_for
+from backend.nav_math import location_offset as _nav_location_offset
 
 logger = logging.getLogger("quarry.real_feed")
 
@@ -100,17 +101,13 @@ def _location_offset_for(waypoint_id: Optional[str], position: dict) -> Optional
     """Waypoint + offset, per the master doc's locked location decision --
     a cheap vector subtraction against the object's nearest known waypoint,
     no live AprilTag dependency at runtime. Returns None if waypoint_id
-    doesn't resolve (e.g. robot isn't currently snapped to any waypoint)."""
+    doesn't resolve (e.g. robot isn't currently snapped to any waypoint).
+    Thin wrapper around nav_math.location_offset() -- the actual math now
+    lives there (single source of truth, unit-tested in test_nav_math.py)
+    instead of being duplicated here and in sequential_patrol.py."""
     if waypoint_id is None:
         return None
-    for wp in WAYPOINTS:
-        if wp["id"] == waypoint_id:
-            return {
-                "waypoint": waypoint_id,
-                "offset_x": round(position["x"] - wp["x"], 3),
-                "offset_y": round(position["y"] - wp["y"], 3),
-            }
-    return None
+    return _nav_location_offset(waypoint_id, position, WAYPOINTS)
 
 
 class Candidate(_BaseCandidate):
