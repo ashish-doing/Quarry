@@ -337,6 +337,12 @@ async def run(hub_url: str, name: str, location: str, team: str):
                     "instant_confidence": candidate.instant_confidence,
                     "waypoint": candidate.waypoint,
                     "is_registered_target": candidate.is_registered_target,
+                    # Additive: waypoint+offset location + OCR cross-check,
+                    # computed in real_feed.maybe_raise_candidate() -- just
+                    # relayed here, not recomputed.
+                    "location_offset": getattr(candidate, "location_offset", None),
+                    "ocr_number": getattr(candidate, "ocr_number", None),
+                    "ocr_anomaly": getattr(candidate, "ocr_anomaly", None),
                 }))
 
             await asyncio.sleep(real_feed.TELEMETRY_TICK_S)

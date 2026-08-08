@@ -38,6 +38,8 @@ from backend.mock_feed import Candidate as _BaseCandidate
 from backend.vision.detector import YoloeDetector
 from backend.vision.reid import TargetMatcher
 from backend.vision.collision_guard import CollisionGuard
+from backend.vision.ocr_check import MarkerOCR
+from backend.objects_registry import load_objects, expected_number_for
 
 logger = logging.getLogger("quarry.real_feed")
 
@@ -93,23 +95,53 @@ SMOOTHING_MIN_HITS = 3        # a label must appear in >=3 of the last 5 to be t
 CONFIDENCE_EMA_ALPHA = 0.35   # exponential-moving-average weight for the rolling confidence shown
                                # alongside the raw single-frame number in the sightings panel
 
-class Candidate(_BaseCandidate):
-    """Extends mock_feed.Candidate with instant_confidence -- purely
-    additive to the WebSocket contract. `confidence` (inherited) is now
-    the EMA-smoothed rolling value used for gating/scoring; this field
-    is the raw single-frame reading, kept only for display so the
-    sightings panel can show both, per the perception hardening plan.
-    Older frontend code that doesn't know this field exists just
-    ignores it -- same as any other unrecognized dict key."""
 
-    def __init__(self, label, confidence, waypoint, is_registered_target, instant_confidence=None):
+def _location_offset_for(waypoint_id: Optional[str], position: dict) -> Optional[dict]:
+    """Waypoint + offset, per the master doc's locked location decision --
+    a cheap vector subtraction against the object's nearest known waypoint,
+    no live AprilTag dependency at runtime. Returns None if waypoint_id
+    doesn't resolve (e.g. robot isn't currently snapped to any waypoint)."""
+    if waypoint_id is None:
+        return None
+    for wp in WAYPOINTS:
+        if wp["id"] == waypoint_id:
+            return {
+                "waypoint": waypoint_id,
+                "offset_x": round(position["x"] - wp["x"], 3),
+                "offset_y": round(position["y"] - wp["y"], 3),
+            }
+    return None
+
+
+class Candidate(_BaseCandidate):
+    """Extends mock_feed.Candidate with instant_confidence, location_offset,
+    and OCR cross-check fields -- purely additive to the WebSocket contract.
+    `confidence` (inherited) is now the EMA-smoothed rolling value used for
+    gating/scoring; `instant_confidence` is the raw single-frame reading,
+    kept only for display. `location_offset` is the waypoint+offset location
+    (Section 5 Task 6). `ocr_number`/`ocr_anomaly` are the OCR cross-check
+    result (Section 4's "OSNet primary, OCR cross-check" rule) -- ocr_anomaly
+    is None unless OCR actually disagreed with the OSNet match; a None value
+    means either "no OCR signal this frame" or "agreed", both non-events for
+    the sightings panel. Older frontend code that doesn't know these fields
+    exist just ignores them -- same as any other unrecognized dict key."""
+
+    def __init__(self, label, confidence, waypoint, is_registered_target, instant_confidence=None,
+                 location_offset=None, ocr_number=None, ocr_anomaly=None):
         super().__init__(label, confidence, waypoint, is_registered_target)
         self.instant_confidence = confidence if instant_confidence is None else instant_confidence
+        self.location_offset = location_offset
+        self.ocr_number = ocr_number
+        self.ocr_anomaly = ocr_anomaly
 
     def to_dict(self):
         d = super().to_dict()
         d["instant_confidence"] = self.instant_confidence
+        d["location_offset"] = self.location_offset
+        d["ocr_number"] = self.ocr_number
+        d["ocr_anomaly"] = self.ocr_anomaly
         return d
+
 
 def _nearest_waypoint(x: float, y: float) -> Optional[str]:
     best_id, best_dist = None, WAYPOINT_SNAP_RADIUS
@@ -134,6 +166,13 @@ class RealRobotState:
         self.detector = YoloeDetector()
         self.matcher = TargetMatcher()
         self.guard: Optional[CollisionGuard] = None  # created once twin is connected
+
+        # OCR cross-check + sequential-object registry -- both additive,
+        # non-fatal if unavailable (ocr.available gates all use of it below;
+        # an empty objects registry just means no expected-number lookups
+        # ever succeed, matching falls back to "no anomaly check possible").
+        self.ocr = MarkerOCR()
+        self.objects_registry = load_objects()
 
         self.registered_targets = []
         self.candidates = {}
@@ -320,8 +359,33 @@ class RealRobotState:
                 label, is_registered = match_name, True
 
         rolling_conf = round(self._rolling_confidence.get(stable_label, best.confidence), 2)
-        candidate = Candidate(label, rolling_conf, wp_id, is_registered,
-                               instant_confidence=round(best.confidence, 2))
+
+        # Waypoint + offset location (Section 5 Task 6) -- cheap vector
+        # subtraction against the object's nearest known waypoint, computed
+        # unconditionally since it costs nothing and every candidate benefits.
+        location_offset = _location_offset_for(wp_id, self._position)
+
+        # OCR cross-check (Section 4's locked "OSNet primary, OCR
+        # cross-check" rule) -- only meaningful for a registered target with
+        # a known expected number, and only if Tesseract is actually
+        # available. A missing OCR signal (no expected number, OCR
+        # unavailable, or nothing readable this frame) is never itself an
+        # anomaly -- only a genuine number MISMATCH is.
+        ocr_number, ocr_anomaly = None, None
+        if is_registered and self.ocr.available:
+            expected_number = expected_number_for(label, self.objects_registry)
+            if expected_number is not None:
+                ocr_result = self.ocr.read_number(crop)
+                ocr_number = ocr_result.number
+                ocr_anomaly = self.ocr.cross_check(ocr_result, expected_number)
+
+        candidate = Candidate(
+            label, rolling_conf, wp_id, is_registered,
+            instant_confidence=round(best.confidence, 2),
+            location_offset=location_offset,
+            ocr_number=ocr_number,
+            ocr_anomaly=ocr_anomaly,
+        )
         # training_crop is deliberately NOT part of Candidate.to_dict() / the
         # WebSocket contract -- it's a same-process, local-only handoff to
         # site_agent.py, never sent to the Hub or any spectator.
@@ -347,6 +411,9 @@ class RealRobotState:
             "id": candidate.id, "label": candidate.label, "confidence": candidate.confidence,
             "waypoint": candidate.waypoint, "timestamp": candidate.timestamp,
             "contributors": contributors,
+            "location_offset": candidate.location_offset,
+            "ocr_number": candidate.ocr_number,
+            "ocr_anomaly": candidate.ocr_anomaly,
         }
         self.bounty_log.insert(0, entry)
         self.bounty_log = self.bounty_log[:50]

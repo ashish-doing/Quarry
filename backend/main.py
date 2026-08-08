@@ -33,10 +33,12 @@ Server -> Client:
   {"type": "activity", "text", "kind", "timestamp"}
   {"type": "site_update", "site_id", "telemetry"}
   {"type": "candidate", "site_id", "id", "label", "confidence",
-   "instant_confidence", "waypoint", "is_registered_target", "timestamp"}
+   "instant_confidence", "waypoint", "is_registered_target", "timestamp",
+   "location_offset", "ocr_number", "ocr_anomaly"}
   {"type": "vote_update", "site_id", "id", "confirms", "disputes"}
   {"type": "match_confirmed", "site_id", "id", "label", "confidence",
-   "waypoint", "timestamp", "contributors", "points"}
+   "waypoint", "timestamp", "contributors", "points",
+   "location_offset", "ocr_number", "ocr_anomaly"}
    {"type": "match_rejected", "site_id", "id", "label", "waypoint", "timestamp"}
   {"type": "leaderboard", "entries", "team_scores"}
   {"type": "team_ping", "site_id", "player", "waypoint", "text", "timestamp"}
@@ -51,12 +53,24 @@ Client -> Server:
   {"type": "join", "name", "role" ("field_agent"|"spectator"), "team"
    ("Alpha"|"Bravo"), "location" (field_agent only), "avatar"}
   {"type": "site_report", "waypoints", "telemetry"}         (field agent's own site_agent.py only)
-  {"type": "candidate_report", "label", "confidence", "instant_confidence", "waypoint", "is_registered_target"}  (field agent only)
+  {"type": "candidate_report", "label", "confidence", "instant_confidence",
+   "waypoint", "is_registered_target", "location_offset", "ocr_number",
+   "ocr_anomaly"}  (field agent only -- location_offset/ocr_* are optional,
+   default to None if the sending site_agent.py predates this addition)
   {"type": "vote", "site_id", "id", "vote"}
   {"type": "ping", "site_id", "waypoint", "text"}
   {"type": "chat", "text"}
   {"type": "follow", "site_id"}   (spectators only -- which feed they're watching)
   {"type": "safety_event", "event" ("collision_alert"|"collision_clear"), "timestamp"}  (field agent only)
+
+NOTE on location_offset/ocr_number/ocr_anomaly: these three fields are
+additive, per real_feed.py's Section 4/6 work -- location_offset is the
+waypoint+offset location of a sighting, ocr_number/ocr_anomaly are the
+OCR cross-check against OSNet's match (anomaly is only ever non-None
+when OCR actively DISAGREED with OSNet, never just "no OCR signal").
+The Hub never receives crop images for these (same same-machine-only
+image boundary as before) -- proof-gallery consumers (bounty_log) get
+the metadata, not the photo.
 """
 
 import json
@@ -104,7 +118,8 @@ def _arena_position(site_id: str):
 
 
 class Candidate:
-    def __init__(self, label, confidence, waypoint, is_registered_target, site_id, instant_confidence=None):
+    def __init__(self, label, confidence, waypoint, is_registered_target, site_id, instant_confidence=None,
+                 location_offset=None, ocr_number=None, ocr_anomaly=None):
         self.id = str(uuid.uuid4())[:8]
         self.site_id = site_id
         self.label = label
@@ -115,6 +130,13 @@ class Candidate:
         self.timestamp = datetime.now(timezone.utc).isoformat()
         self.votes: Dict[str, str] = {}
         self.status = "pending"
+        # Additive: waypoint+offset location (Section 5 Task 6) and OCR
+        # cross-check result (Section 4's locked identity rule). Both are
+        # computed on the Field Agent's own machine (real_feed.py) and
+        # relayed here as plain metadata -- the Hub never re-derives them.
+        self.location_offset = location_offset
+        self.ocr_number = ocr_number
+        self.ocr_anomaly = ocr_anomaly
 
     def net_confirms(self):
         c = sum(1 for v in self.votes.values() if v == "confirm")
@@ -132,6 +154,9 @@ class Candidate:
             "confidence": self.confidence, "instant_confidence": self.instant_confidence,
             "waypoint": self.waypoint,
             "is_registered_target": self.is_registered_target, "timestamp": self.timestamp,
+            "location_offset": self.location_offset,
+            "ocr_number": self.ocr_number,
+            "ocr_anomaly": self.ocr_anomaly,
         }
 
 
@@ -231,6 +256,11 @@ class Hub:
             "chat_log": list(self.chat_log),
             "activity_log": list(self.activity_log),
             "targets": self.targets,
+            # bounty_log doubles as the proof gallery's data source (Section 5
+            # Task 9): each entry already carries location_offset/ocr_number/
+            # ocr_anomaly alongside label/waypoint/contributors/points, added
+            # at confirm time below. No crop image travels with it -- that
+            # stays same-machine-only per the existing architecture boundary.
             "bounty_log": self.bounty_log[:50],
         }
 
@@ -326,6 +356,9 @@ async def ws_endpoint(websocket: WebSocket):
                     msg.get("label"), msg.get("confidence"), msg.get("waypoint"),
                     msg.get("is_registered_target", False), site_id=player.site_id,
                     instant_confidence=msg.get("instant_confidence"),
+                    location_offset=msg.get("location_offset"),
+                    ocr_number=msg.get("ocr_number"),
+                    ocr_anomaly=msg.get("ocr_anomaly"),
                 )
                 hub.sites[player.site_id].candidates[candidate.id] = candidate
                 await broadcast(candidate.to_dict())
@@ -405,6 +438,9 @@ async def ws_endpoint(websocket: WebSocket):
                         "site_id": site_id, "id": candidate.id, "label": candidate.label,
                         "confidence": candidate.confidence, "waypoint": candidate.waypoint,
                         "timestamp": candidate.timestamp, "contributors": contributors, "points": points,
+                        "location_offset": candidate.location_offset,
+                        "ocr_number": candidate.ocr_number,
+                        "ocr_anomaly": candidate.ocr_anomaly,
                     }
                     hub.bounty_log.insert(0, entry)
                     hub.bounty_log = hub.bounty_log[:50]
@@ -415,9 +451,11 @@ async def ws_endpoint(websocket: WebSocket):
                     await broadcast({"type": "match_confirmed", **entry})
                     await broadcast({"type": "leaderboard", "entries": hub.leaderboard_sorted(),
                                        "team_scores": hub.team_scores_sorted()})
+                    anomaly_note = f" [OCR ANOMALY: {candidate.ocr_anomaly}]" if candidate.ocr_anomaly else ""
                     await log_activity(
                         f'TARGET CONFIRMED -- "{candidate.label}" @ {candidate.waypoint} '
-                        f"({site.owner}'s site, Team {site.team}) by {', '.join(contributors)} -- +{points} pts",
+                        f"({site.owner}'s site, Team {site.team}) by {', '.join(contributors)} -- +{points} pts"
+                        f"{anomaly_note}",
                         "match",
                     )
                 elif candidate.net_confirms() <= -CONFIRM_THRESHOLD:
