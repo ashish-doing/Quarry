@@ -1,0 +1,11 @@
+{
+  "_comment": "QUARRY sequential-survey object registry. number = sequential visit order (string, zero-padded). target_name must match the name passed to real_feed.state.register_target(). expected_waypoint must be one of real_feed.WAYPOINTS[*]['id']. twin_semantic_label is owned by the twin-sync chat -- reconcile this field once that chat's real output format is known (see master doc Section 6). This file is hand-authored/edited, not generated.",
+  "objects": [
+    {"number": "01", "target_name": "object-01", "expected_waypoint": "W1", "twin_semantic_label": null},
+    {"number": "02", "target_name": "object-02", "expected_waypoint": "W2", "twin_semantic_label": null},
+    {"number": "03", "target_name": "object-03", "expected_waypoint": "W3", "twin_semantic_label": null},
+    {"number": "04", "target_name": "object-04", "expected_waypoint": "W4", "twin_semantic_label": null},
+    {"number": "05", "target_name": "object-05", "expected_waypoint": "W5", "twin_semantic_label": null},
+    {"number": "06", "target_name": "object-06", "expected_waypoint": "W6", "twin_semantic_label": null}
+  ]
+}
