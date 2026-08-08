@@ -74,9 +74,48 @@ def _color_for_label(label: str):
     return _FALLBACK_PALETTE[hash(label) % len(_FALLBACK_PALETTE)]
 
 
+# ---------------------------------------------------------------------------
+# Cube-outline overlay -- per the master doc's locked Section 4 decision:
+# "Cube outline -- stylized 2D overlay ONLY, not real depth." This hardware
+# has no lidar/depth camera (see collision_guard.py's own honesty note about
+# the same hardware ceiling), so there is nothing real to draw a 3D box
+# from. What follows is a fixed-fraction visual flourish -- a "back face"
+# offset by a constant percentage of the box's own width/height, connected
+# to the real 2D bbox corners -- for pitch-material polish only. NEVER
+# read this as, or present it as, an actual 3D reconstruction.
+# ---------------------------------------------------------------------------
+CUBE_DEPTH_FRACTION = 0.18  # how far the "back face" is offset, as a fraction of the
+                             # box's own width/height -- a styling constant, not a
+                             # measurement of anything
+
+
+def _draw_cube_overlay(frame, x1: int, y1: int, x2: int, y2: int, color):
+    """Draws a pseudo-3D wireframe box over an existing 2D bbox. Purely a
+    rendering flourish (see module note above) -- offsets every box by the
+    same fixed convention (back face up-and-right) so the effect reads
+    consistently across the whole annotated feed, rather than trying to
+    infer a "correct" direction from anything the vision pipeline actually
+    knows (it doesn't know one -- single RGB frame, no depth)."""
+    w, h = x2 - x1, y2 - y1
+    if w <= 0 or h <= 0:
+        return
+    dx, dy = max(2, int(w * CUBE_DEPTH_FRACTION)), max(2, int(h * CUBE_DEPTH_FRACTION))
+    bx1, by1, bx2, by2 = x1 + dx, y1 - dy, x2 + dx, y2 - dy
+
+    thin = 1
+    cv2.rectangle(frame, (bx1, by1), (bx2, by2), color, thin)
+    for (fx, fy), (bxp, byp) in (
+        ((x1, y1), (bx1, by1)), ((x2, y1), (bx2, by1)),
+        ((x2, y2), (bx2, by2)), ((x1, y2), (bx1, by2)),
+    ):
+        cv2.line(frame, (fx, fy), (bxp, byp), color, thin)
+
+
 def _draw_detections(frame, detections):
-    """Draw a box + label/confidence per detection, one distinct color per
-    label so different object types are easy to tell apart at a glance."""
+    """Draw a box + label/confidence + pseudo-3D cube overlay per detection,
+    one distinct color per label so different object types are easy to tell
+    apart at a glance. The cube overlay is 2D-styled polish only -- see
+    _draw_cube_overlay's docstring."""
     annotated = frame.copy()
     h, w = annotated.shape[:2]
     for det in detections:
@@ -84,6 +123,7 @@ def _draw_detections(frame, detections):
         x1, y1, x2, y2 = int(x1 * w), int(y1 * h), int(x2 * w), int(y2 * h)
         color = _color_for_label(det.label)
         cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+        _draw_cube_overlay(annotated, x1, y1, x2, y2, color)
         label = f"{det.label} {det.confidence:.2f}"
         cv2.putText(annotated, label, (x1, max(y1 - 8, 12)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
