@@ -11,7 +11,10 @@ main.py's module docstring, which this module honors precisely.
 
 Pulls telemetry + camera frames from the QUARRY twin via the
 Cyberwave SDK, runs YOLOE-26 detection + OSNet re-id, and raises the
-same `candidate` events mock_feed used to fabricate randomly.
+same `candidate` events mock_feed used to fabricate randomly. Shared
+by BOTH the inner UGV (inner_agent.py) and outer UGVs (site_agent.py)
+-- this module doesn't know or care which role is using it; the
+distinction lives one layer up.
 
 REQUIRED BEFORE FIRST RUN:
   1. Set CYBERWAVE_API_KEY in your environment (or .env, loaded by main.py).
@@ -24,6 +27,7 @@ REQUIRED BEFORE FIRST RUN:
 
 import asyncio
 import logging
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -51,9 +55,8 @@ logger = logging.getLogger("quarry.real_feed")
 # themselves. x/y below are STILL PLACEHOLDER until measure_waypoints.py
 # is run at the actual venue and the recorded tag positions are converted
 # into this same (x, y) frame. Keep the same units/frame as get_pose()
-# returns, and the same frame the frontend's Three.js map already expects
-# (see map3d.js) -- do not just paste measure_waypoints.py's raw output
-# here, that's in the CAMERA's frame relative to two reference tags, not
+# returns -- do not just paste measure_waypoints.py's raw output here,
+# that's in the CAMERA's frame relative to two reference tags, not
 # get_pose()'s frame. The conversion between those two frames is real
 # work that hasn't been done yet; measure_waypoints.py's README section
 # explains why it can't do that conversion for you automatically.
@@ -96,15 +99,39 @@ SMOOTHING_MIN_HITS = 3        # a label must appear in >=3 of the last 5 to be t
 CONFIDENCE_EMA_ALPHA = 0.35   # exponential-moving-average weight for the rolling confidence shown
                                # alongside the raw single-frame number in the sightings panel
 
+# -- capture framing gate ----------------------------------------------------
+# Per the mission requirement: a proof photo should be a properly-framed
+# capture, not whatever happened to be in view the instant the smoothing
+# window cleared. This is a MINIMUM bbox-area-fraction gate -- too small
+# means the object is still far/at the frame edge, so candidate-raising
+# (and therefore the proof photo) waits rather than firing on a distant,
+# hard-to-verify sighting. This is deliberately independent from
+# CollisionGuard's proximity threshold (which is a MAXIMUM, for safety) --
+# same underlying bbox-area-as-proxy technique, opposite purpose, not the
+# same constant, don't conflate the two.
+MIN_FRAME_FRACTION = 0.05
+
+# -- intruder detection -------------------------------------------------
+# Any unregistered "person" detection is treated as a possible intruder,
+# checked independently of the numbered-object candidate pipeline (no
+# waypoint gating, no multi-tick smoothing requirement -- an intruder
+# alert needs to be fast and cheap to fire, not de-duplicated the way a
+# numbered-object sighting is, since false-alarm cost here is much lower
+# than a missed real one). Deliberately NOT cross-checked against
+# registered targets -- registered targets in this mission are numbered
+# props (boxes, etc.), not people, so there's no "known person" case to
+# exclude.
+INTRUDER_LABEL = "person"
+INTRUDER_COOLDOWN_S = 15.0
+
 
 def _location_offset_for(waypoint_id: Optional[str], position: dict) -> Optional[dict]:
     """Waypoint + offset, per the master doc's locked location decision --
     a cheap vector subtraction against the object's nearest known waypoint,
     no live AprilTag dependency at runtime. Returns None if waypoint_id
     doesn't resolve (e.g. robot isn't currently snapped to any waypoint).
-    Thin wrapper around nav_math.location_offset() -- the actual math now
-    lives there (single source of truth, unit-tested in test_nav_math.py)
-    instead of being duplicated here and in sequential_patrol.py."""
+    Thin wrapper around nav_math.location_offset() -- the actual math lives
+    there (single source of truth, unit-tested in test_nav_math.py)."""
     if waypoint_id is None:
         return None
     return _nav_location_offset(waypoint_id, position, WAYPOINTS)
@@ -118,10 +145,12 @@ class Candidate(_BaseCandidate):
     kept only for display. `location_offset` is the waypoint+offset location
     (Section 5 Task 6). `ocr_number`/`ocr_anomaly` are the OCR cross-check
     result (Section 4's "OSNet primary, OCR cross-check" rule) -- ocr_anomaly
-    is None unless OCR actually disagreed with the OSNet match; a None value
-    means either "no OCR signal this frame" or "agreed", both non-events for
-    the sightings panel. Older frontend code that doesn't know these fields
-    exist just ignores them -- same as any other unrecognized dict key."""
+    is None unless OCR actually disagreed with the OSNet match. Note:
+    `image`/`twin_semantic_label` (the mission-narrative additions for the
+    proof gallery and identity-vs-twin comparison) are deliberately NOT
+    fields on this class -- they're attached by the relay layer
+    (inner_agent.py / site_agent.py) at send time, since this class's job
+    is CV/telemetry state, not WebSocket payload shaping."""
 
     def __init__(self, label, confidence, waypoint, is_registered_target, instant_confidence=None,
                  location_offset=None, ocr_number=None, ocr_anomaly=None):
@@ -176,6 +205,7 @@ class RealRobotState:
         self.bounty_log = []
         self.leaderboard = {}
         self._last_candidate_at = {}  # (label, waypoint) -> monotonic time, cooldown tracking
+        self._last_intruder_alert_at = 0.0
         self._label_history: deque = deque(maxlen=SMOOTHING_WINDOW)
         self._rolling_confidence: dict = {}  # label -> EMA confidence
 
@@ -305,15 +335,54 @@ class RealRobotState:
             return best.label, best
         return None, None
 
+    def check_intruder(self, detections) -> Optional[dict]:
+        """Independent of the numbered-object candidate pipeline below --
+        run this every tick alongside maybe_raise_candidate() using the
+        SAME detections list (no extra detect() call). Returns an
+        alert-shaped dict ready to hand to the relay layer's
+        alert_report message, or None if nothing worth alerting this
+        tick. See the module-level INTRUDER_* constants' comment for why
+        this doesn't do waypoint/cooldown gating the same way candidates
+        do."""
+        if not detections:
+            return None
+        now = time.monotonic()
+        if now - self._last_intruder_alert_at < INTRUDER_COOLDOWN_S:
+            return None
+
+        person = max(
+            (d for d in detections if d.label == INTRUDER_LABEL),
+            key=lambda d: d.confidence, default=None,
+        )
+        if person is None:
+            return None
+
+        self._last_intruder_alert_at = now
+        wp_id = self.current_waypoint_id()
+        distance_m = None
+        for wp in WAYPOINTS:
+            if wp["id"] == wp_id:
+                distance_m = round(math.hypot(self._position["x"] - wp["x"], self._position["y"] - wp["y"]), 3)
+                break
+
+        return {
+            "kind": "intruder",
+            "position": dict(self._position),
+            "nearest_waypoint": wp_id,
+            "distance_m": distance_m,
+            "message": f"Possible intruder detected (confidence {person.confidence:.2f}).",
+        }
+
     def maybe_raise_candidate(self, frame=None, detections=None) -> Optional[Candidate]:
         wp_id = self.current_waypoint_id()
         if not wp_id or not self.detector.available:
             return None
 
         # Accept a pre-captured frame + pre-computed detections so callers
-        # (site_agent.py's video overlay) can share one capture+detect per
-        # tick instead of each doing their own -- was a real, flagged
-        # redundancy: three independent frame pulls per tick otherwise.
+        # (site_agent.py / inner_agent.py's video overlay) can share one
+        # capture+detect per tick instead of each doing their own -- was a
+        # real, flagged redundancy: multiple independent frame pulls per
+        # tick otherwise.
         if frame is None or detections is None:
             frame = self._capture_frame()
             if frame is None:
@@ -323,6 +392,15 @@ class RealRobotState:
         stable_label, best = self._update_smoothing(detections)
         if stable_label is None:
             return None  # nothing seen, or seen but not consistently enough yet
+
+        # Capture framing gate: a properly-framed proof photo means the
+        # object isn't still tiny/at-the-edge of frame. Below this
+        # threshold, wait rather than raise -- the smoothing window can
+        # clear on a distant, barely-visible detection just as easily as
+        # a close, well-framed one, and this mission explicitly wants the
+        # proof photo to actually be a good capture.
+        if CollisionGuard._bbox_area_fraction(best.bbox) < MIN_FRAME_FRACTION:
+            return None
 
         # Don't raise a new candidate if one for this exact label+waypoint is
         # already open and awaiting a vote -- the cooldown alone wasn't enough,
@@ -344,9 +422,8 @@ class RealRobotState:
 
 
         # Crop is now taken unconditionally, not just when matching against
-        # registered targets -- this is the raw material for the ML data
-        # flywheel below (site_agent.py saves it once the Hub confirms/rejects
-        # the sighting). Matching logic itself is unchanged.
+        # registered targets -- this is the raw material for the proof
+        # gallery / data flywheel. Matching logic itself is unchanged.
         crop = self._crop(frame, best.bbox)
 
         label, is_registered = stable_label, False
@@ -383,9 +460,10 @@ class RealRobotState:
             ocr_number=ocr_number,
             ocr_anomaly=ocr_anomaly,
         )
-        # training_crop is deliberately NOT part of Candidate.to_dict() / the
-        # WebSocket contract -- it's a same-process, local-only handoff to
-        # site_agent.py, never sent to the Hub or any spectator.
+        # training_crop is a same-process, local handoff to the relay layer
+        # (site_agent.py / inner_agent.py) -- NOT part of Candidate.to_dict().
+        # The relay layer decides whether/how to encode it for transmission
+        # (the mission's proof-gallery `image` field is built there, not here).
         candidate.training_crop = crop
         self.candidates[candidate.id] = candidate
         return candidate
@@ -422,7 +500,10 @@ class RealRobotState:
         """photos, if given, must be a list of already-decoded HxWx3 numpy
         arrays (decode uploads with cv2.imdecode before calling this).
         Register from 3-5 angles for real re-id robustness -- a single
-        photo still works but is the weaker case."""
+        photo still works but is the weaker case. In the current mission
+        flow this is called once, offline, before a run starts (no more
+        live in-session registration UI) -- see objects_registry.py and
+        register_mission_objects.py."""
         self.registered_targets.append({"name": name, "note": note})
         if photos:
             self.matcher.register(name, photos)

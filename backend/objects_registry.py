@@ -24,7 +24,7 @@ class RegisteredObject:
     number: str               # zero-padded sequence position, e.g. "01"
     target_name: str          # must match the name passed to state.register_target()
     expected_waypoint: str    # must be one of real_feed.WAYPOINTS[*]["id"]
-    twin_semantic_label: Optional[str]  # owned by the twin-sync chat, may be None until reconciled
+    twin_semantic_label: Optional[str]  # what the twin claims lives at this location
 
 
 def load_objects(path: str = DEFAULT_PATH) -> List[RegisteredObject]:
@@ -35,8 +35,8 @@ def load_objects(path: str = DEFAULT_PATH) -> List[RegisteredObject]:
     if not os.path.exists(path):
         logger.warning(
             "objects_config.json not found at %s -- sequential controller "
-            "has nothing to survey. Create it (see docs/objects_config.json "
-            "for the schema) before running sequential_patrol.py.", path,
+            "has nothing to survey. Create it (see the schema in this file) "
+            "before running inner_agent.py.", path,
         )
         return []
 
@@ -58,9 +58,9 @@ def load_objects(path: str = DEFAULT_PATH) -> List[RegisteredObject]:
     if unlabeled:
         logger.info(
             "objects_config.json: %d object(s) have no twin_semantic_label yet "
-            "(numbers: %s) -- fine for standalone nav/OCR work, but reconcile "
-            "against the twin-sync chat's real schema before Section 5 Task 7 "
-            "(dual real-feed + twin-view) needs it.", len(unlabeled), unlabeled,
+            "(numbers: %s) -- the identity-vs-twin comparison spectators vote on "
+            "will show 'unknown' for these until reconciled against the actual "
+            "Cyberwave twin environment's object placement.", len(unlabeled), unlabeled,
         )
 
     return objects
@@ -73,4 +73,19 @@ def expected_number_for(target_name: str, objects: List[RegisteredObject]) -> Op
     for o in objects:
         if o.target_name == target_name:
             return o.number
+    return None
+
+
+def twin_label_for(target_name: str, objects: List[RegisteredObject]) -> Optional[str]:
+    """Given an OSNet-matched target name, returns what the twin
+    environment claims actually lives at that object's waypoint (e.g.
+    "tree", "chair") -- this is the other half of the identity check
+    spectators vote on: does the real captured object (label + OCR
+    number) actually match what the twin describes? Returns None if the
+    target isn't registered or hasn't been reconciled with a twin label
+    yet (see load_objects()' logging note above -- None here is an
+    honest "not yet known," not a claim that nothing is there)."""
+    for o in objects:
+        if o.target_name == target_name:
+            return o.twin_semantic_label
     return None

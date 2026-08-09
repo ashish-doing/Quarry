@@ -1,26 +1,36 @@
 """
-site_agent.py -- Field Agent relay, run on YOUR laptop alongside your own
-robot. Connects to the shared Hub (main.py, possibly running on someone
-else's machine via ngrok) as a WebSocket client and reports YOUR site's
-telemetry + candidates into the shared session.
+site_agent.py -- OUTER UGV relay, run on an outer participant's own
+laptop alongside their own robot. Connects to the shared Hub (main.py)
+as a WebSocket client and reports that site's telemetry, candidates,
+and intruder alerts into the shared mission session.
+
+MISSION ROLE: outer UGVs patrol their own space as overwatch -- they
+don't run the numbered-object sequence (that's the inner UGV's job, see
+inner_agent.py). What an outer UGV DOES do: share live position with
+everyone else (so the inner UGV's operator can see roughly where outer
+coverage is), and raise an immediate alert if its own vision spots an
+unregistered person -- a possible intruder near the mission. Movement
+itself is still driven separately (teleop.py or patrol.py, exactly as
+before) -- this script only relays and watches, never drives.
 
 This does NOT give the Hub or any spectator control over your robot --
-it only sends data outward (site_report, candidate_report). Nothing in
-this script or the Hub's contract accepts a drive command from anyone
-but your own local teleop.py / real_feed.py, which you still run exactly
-as before, unchanged.
+it only sends data outward. Nothing in this script or the Hub's
+contract accepts a drive command from anyone but your own local
+teleop.py / patrol.py, which you still run exactly as before, unchanged.
 
 Reuses real_feed.py's RealRobotState so detection/pose logic lives in
-exactly one place -- this file only adds the "relay it to the Hub" concern.
+exactly one place -- this file only adds the "relay it to the Hub"
+concern, same as it always did.
 
 Usage:
-    python backend/site_agent.py --hub ws://<hub-host>:8000/ws --name "Priya" --location "Berlin, DE"
+    python -m backend.site_agent --hub ws://<hub-host>:8000/ws --name "Priya" --location "Berlin, DE"
 
 Requires: pip install websockets
 """
 
 import argparse
 import asyncio
+import base64
 import cgi
 import json
 import os
@@ -36,6 +46,8 @@ import websockets
 from dotenv import load_dotenv
 
 from backend.vision.collision_guard import CollisionGuard
+from backend.vision.overlay import draw_detections
+from backend.objects_registry import twin_label_for
 
 from backend import real_feed
 
@@ -47,91 +59,12 @@ load_dotenv()
 FRAME_SERVER_PORT = 8099
 _latest_jpeg = None  # shared between the detection loop and the HTTP thread
 
-
-# One fixed, high-contrast color per label so different object types are
-# instantly distinguishable in the live feed, instead of everything being
-# the same green. BGR tuples (OpenCV convention, not RGB). Cycles by hash
-# if a label isn't in this explicit map, so new vocabulary entries still
-# get a stable, distinct-ish color without needing a manual update here.
-_LABEL_COLORS = {
-    "person":    (0, 0, 255),     # red -- highest-attention label
-    "clothing":  (128, 128, 128), # gray -- deliberately dull, the "false alarm" label
-    "backpack":  (0, 255, 255),   # yellow
-    "bag":       (0, 200, 255),   # orange-yellow
-    "box":       (255, 128, 0),   # blue-ish
-    "toolbox":   (255, 0, 128),   # purple-ish
-    "chair":     (0, 255, 0),     # green
-}
-_FALLBACK_PALETTE = [
-    (255, 0, 0), (0, 128, 255), (255, 0, 255), (128, 255, 0),
-    (0, 200, 200), (200, 200, 0), (180, 0, 180),
-]
-
-
-def _color_for_label(label: str):
-    if label in _LABEL_COLORS:
-        return _LABEL_COLORS[label]
-    return _FALLBACK_PALETTE[hash(label) % len(_FALLBACK_PALETTE)]
-
-
-# ---------------------------------------------------------------------------
-# Cube-outline overlay -- per the master doc's locked Section 4 decision:
-# "Cube outline -- stylized 2D overlay ONLY, not real depth." This hardware
-# has no lidar/depth camera (see collision_guard.py's own honesty note about
-# the same hardware ceiling), so there is nothing real to draw a 3D box
-# from. What follows is a fixed-fraction visual flourish -- a "back face"
-# offset by a constant percentage of the box's own width/height, connected
-# to the real 2D bbox corners -- for pitch-material polish only. NEVER
-# read this as, or present it as, an actual 3D reconstruction.
-# ---------------------------------------------------------------------------
-CUBE_DEPTH_FRACTION = 0.18  # how far the "back face" is offset, as a fraction of the
-                             # box's own width/height -- a styling constant, not a
-                             # measurement of anything
-
-
-def _draw_cube_overlay(frame, x1: int, y1: int, x2: int, y2: int, color):
-    """Draws a pseudo-3D wireframe box over an existing 2D bbox. Purely a
-    rendering flourish (see module note above) -- offsets every box by the
-    same fixed convention (back face up-and-right) so the effect reads
-    consistently across the whole annotated feed, rather than trying to
-    infer a "correct" direction from anything the vision pipeline actually
-    knows (it doesn't know one -- single RGB frame, no depth)."""
-    w, h = x2 - x1, y2 - y1
-    if w <= 0 or h <= 0:
-        return
-    dx, dy = max(2, int(w * CUBE_DEPTH_FRACTION)), max(2, int(h * CUBE_DEPTH_FRACTION))
-    bx1, by1, bx2, by2 = x1 + dx, y1 - dy, x2 + dx, y2 - dy
-
-    thin = 1
-    cv2.rectangle(frame, (bx1, by1), (bx2, by2), color, thin)
-    for (fx, fy), (bxp, byp) in (
-        ((x1, y1), (bx1, by1)), ((x2, y1), (bx2, by1)),
-        ((x2, y2), (bx2, by2)), ((x1, y2), (bx1, by2)),
-    ):
-        cv2.line(frame, (fx, fy), (bxp, byp), color, thin)
-
-
-def _draw_detections(frame, detections):
-    """Draw a box + label/confidence + pseudo-3D cube overlay per detection,
-    one distinct color per label so different object types are easy to tell
-    apart at a glance. The cube overlay is 2D-styled polish only -- see
-    _draw_cube_overlay's docstring."""
-    annotated = frame.copy()
-    h, w = annotated.shape[:2]
-    for det in detections:
-        x1, y1, x2, y2 = det.bbox
-        x1, y1, x2, y2 = int(x1 * w), int(y1 * h), int(x2 * w), int(y2 * h)
-        color = _color_for_label(det.label)
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-        _draw_cube_overlay(annotated, x1, y1, x2, y2, color)
-        label = f"{det.label} {det.confidence:.2f}"
-        cv2.putText(annotated, label, (x1, max(y1 - 8, 12)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-    return annotated
-
 TRAINING_DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "training_data")
 PENDING_CROP_MAXLEN = 20  # not-yet-echoed-by-the-Hub crops kept in memory; old
                            # unmatched entries just age out if a broadcast is lost
+PROOF_IMAGE_MAX_DIM = 480  # downscale crops before base64-encoding for the Hub --
+                            # this is a proof-gallery thumbnail, not a full-res photo,
+                            # keep the WebSocket payload small
 
 
 def _slugify(name: str) -> str:
@@ -139,6 +72,25 @@ def _slugify(name: str) -> str:
     can recognize which Hub broadcasts are about ITS OWN site, without
     importing main.py's FastAPI app just for one string function."""
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "site"
+
+
+def _encode_proof_image(crop) -> str:
+    """Downscales and JPEG-encodes a crop for transmission to the Hub --
+    this is the mission's proof-gallery image, sent once per confirmed-
+    candidate-worthy capture, not per frame. Reverses the earlier
+    same-machine-only crop rule specifically for this purpose (see
+    main.py's module docstring note on `image`)."""
+    if crop is None or crop.size == 0:
+        return None
+    h, w = crop.shape[:2]
+    scale = min(1.0, PROOF_IMAGE_MAX_DIM / max(h, w))
+    if scale < 1.0:
+        crop = cv2.resize(crop, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    bgr = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
+    ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    if not ok:
+        return None
+    return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
 def _save_training_example(label: str, crop, outcome: str):
@@ -180,6 +132,7 @@ def _update_stats(label: str, outcome: str):
     with open(stats_path, "w") as f:
         json.dump(stats, f, indent=2)
 
+
 class _FrameHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/latest.jpg"):
@@ -205,13 +158,14 @@ class _FrameHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def _handle_register_target(self):
-        """Local-only target registration for THIS Field Agent's own
-        matcher -- same same-machine-only pattern as /latest.jpg. Photos
-        are decoded here and handed to real_feed.state.register_target(),
-        which is otherwise never called by anything in the current
-        codebase -- registering a name/points on the shared Hub via
-        /api/targets does NOT feed this; the two are separate concerns
-        by design (shared scoring metadata vs. local CV matching)."""
+        """Local-only, OFFLINE pre-run target registration -- there is no
+        live in-session '+TARGET' UI anymore (see main.py's docstring on
+        what was removed). This endpoint still exists as a same-machine
+        scripting tool: run it once before a session starts to register
+        this outer site's own targets, if it has any. For the inner UGV's
+        numbered-object registration, see register_mission_objects.py /
+        inner_agent.py instead -- outer sites typically won't call this
+        at all, since outer UGVs don't run the numbered-object sequence."""
         try:
             environ = {"REQUEST_METHOD": "POST"}
             if self.headers.get("Content-Type"):
@@ -267,14 +221,16 @@ def _start_frame_server():
           f"that needs the still-pending ngrok/tunnel work)")
 
 
-async def run(hub_url: str, name: str, location: str, team: str):
+async def run(hub_url: str, name: str, location: str, site_role: str):
     real_feed.state.connect()
-    print(f"Connected to your own twin. Relaying to Hub as Field Agent '{name}' ({location}).")
+    print(f"Connected to your own twin. Relaying to Hub as {site_role.title()} "
+          f"Field Agent '{name}' ({location}).")
     _start_frame_server()
 
     async with websockets.connect(hub_url) as ws:
         await ws.send(json.dumps({
-            "type": "join", "name": name, "role": "field_agent", "location": location, "team": team,
+            "type": "join", "name": name, "role": "field_agent",
+            "location": location, "site_role": site_role,
         }))
 
         init_raw = await ws.recv()
@@ -284,11 +240,6 @@ async def run(hub_url: str, name: str, location: str, team: str):
             return
         print("Joined Hub session.")
 
-        # Collision guard was previously only started inside real_feed.py's
-        # telemetry_loop(), which the multi-site path never calls -- the
-        # emergency stop has never actually run during a real site_agent.py
-        # session. Started here instead, now that a ws connection exists
-        # to report alerts through.
         my_site_id = _slugify(name)
         pending_crops = deque(maxlen=PENDING_CROP_MAXLEN)
         hub_id_to_crop = {}  # Hub-assigned candidate id -> {"label", "crop"}
@@ -301,10 +252,6 @@ async def run(hub_url: str, name: str, location: str, team: str):
         guard = CollisionGuard(real_feed.state.twin, real_feed.state.detector, on_event=_on_collision_event)
         asyncio.create_task(guard.run())
 
-        # Now actively processes broadcasts (previously dropped everything) --
-        # correlates the Hub's own candidate id back to the crop THIS process
-        # raised, purely by matching (site_id, label, waypoint) against the
-        # pending queue. The Hub itself never sees or stores crop images.
         async def drain():
             async for raw in ws:
                 try:
@@ -345,11 +292,9 @@ async def run(hub_url: str, name: str, location: str, team: str):
             }))
 
             # -- video overlay: runs every tick, independent of the
-            # waypoint/cooldown gating that maybe_raise_candidate() uses
-            # for scoring -- you should see boxes regardless of whether
-            # a "candidate" is currently being raised for points.
+            # waypoint/cooldown gating that maybe_raise_candidate() uses.
             # One capture + one detect() per tick, shared between the video
-            # overlay and candidate scoring below -- previously ran twice.
+            # overlay, candidate scoring, and intruder-check below.
             frame = real_feed.state._capture_frame()
             detections = []
             if frame is not None and real_feed.state.detector.available:
@@ -357,11 +302,20 @@ async def run(hub_url: str, name: str, location: str, team: str):
                 if frame is not None:
                     detections = real_feed.state.detector.detect(frame)
                     bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                    annotated = _draw_detections(bgr, detections)
+                    annotated = draw_detections(bgr, detections)
                     ok, buf = cv2.imencode(".jpg", annotated)
                     if ok:
                         global _latest_jpeg
                         _latest_jpeg = buf.tobytes()
+
+            # -- intruder watch: this is the core of the outer-UGV role.
+            # Independent of candidate-raising below -- fires its own
+            # cooldown, no waypoint gating (see real_feed.check_intruder's
+            # docstring for why).
+            alert = real_feed.state.check_intruder(detections)
+            if alert:
+                await ws.send(json.dumps({"type": "alert_report", **alert}))
+                print(f"[ALERT] {alert['message']} near {alert['nearest_waypoint']}")
 
             candidate = real_feed.state.maybe_raise_candidate(frame=frame, detections=detections)
             if candidate:
@@ -377,12 +331,11 @@ async def run(hub_url: str, name: str, location: str, team: str):
                     "instant_confidence": candidate.instant_confidence,
                     "waypoint": candidate.waypoint,
                     "is_registered_target": candidate.is_registered_target,
-                    # Additive: waypoint+offset location + OCR cross-check,
-                    # computed in real_feed.maybe_raise_candidate() -- just
-                    # relayed here, not recomputed.
                     "location_offset": getattr(candidate, "location_offset", None),
                     "ocr_number": getattr(candidate, "ocr_number", None),
                     "ocr_anomaly": getattr(candidate, "ocr_anomaly", None),
+                    "image": _encode_proof_image(crop),
+                    "twin_semantic_label": twin_label_for(candidate.label, real_feed.state.objects_registry),
                 }))
 
             await asyncio.sleep(real_feed.TELEMETRY_TICK_S)
@@ -393,7 +346,12 @@ if __name__ == "__main__":
     parser.add_argument("--hub", required=True, help="ws:// or wss:// URL of the Hub's /ws endpoint")
     parser.add_argument("--name", required=True)
     parser.add_argument("--location", required=True, help='e.g. "Berlin, DE" -- shown to everyone, keep it coarse')
-    parser.add_argument("--team", default="Alpha", choices=["Alpha", "Bravo"])
+    parser.add_argument("--role", default="outer", choices=["inner", "outer"],
+                         help="Mission role for this site. Outer UGVs use this script; the inner "
+                              "UGV should normally run inner_agent.py instead, which also drives the "
+                              "sequential survey. --role inner is accepted here only for flexibility "
+                              "(e.g. relaying an inner UGV that's being driven by a separate teleop.py "
+                              "session rather than inner_agent.py's own driving loop).")
     args = parser.parse_args()
 
-    asyncio.run(run(args.hub, args.name, args.location, args.team))
+    asyncio.run(run(args.hub, args.name, args.location, args.role))

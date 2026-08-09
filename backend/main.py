@@ -1,76 +1,86 @@
 """
-main.py -- QUARRY Mission Control, multi-site Hub edition.
+main.py -- QUARRY Mission Control Hub, co-op recon edition.
 
 Run with:
     uvicorn backend.main:app --reload
-Open http://127.0.0.1:8000 -- everyone who connects joins the SAME shared
-session, either as a Field Agent (has their own robot, runs their own
-backend.site_agent.py locally to report in) or a Spectator (no hardware,
-just watches/votes/chats).
+Open http://127.0.0.1:8000
 
-ARCHITECTURE (see rebuild brief Section 2 -- this is not PUBG):
-There is no shared physical world. Each Field Agent's robot lives in
-their own room, driven only by them -- this Hub only aggregates
-telemetry, candidate sightings, votes, and chat across sites. It never
-becomes a control channel for anyone's hardware. A Field Agent's own
-site_agent.py (running alongside their own real_feed.py) is the only
-thing that can report new telemetry/candidates for their site; nobody
-else's WebSocket message can touch another player's site data.
+MISSION FRAME
+-------------
+One INNER UGV runs the actual objective: a sequential numbered-object
+survey inside a taped arena (see inner_agent.py / sequential_patrol.py).
+Any number of OUTER UGVs -- other people's real hardware, dropped into
+the same Cyberwave twin from their own space -- patrol their own area
+as a second, cooperative task: watching for anyone who isn't part of
+the mission. Inner and outer share live position with each other
+through this Hub, so an outer UGV spotting an intruder can tell the
+inner UGV roughly where that is relative to where the inner UGV
+currently stands. Nobody drives anybody else's robot -- enforced in the
+architecture, not just the UI, same as before.
 
-Lightweight anti-spam "profile": a name is claimed uniquely per session
-(case-insensitive, no two players share one), and votes/pings/chat are
-rate-limited per connection. This is identity-for-accountability, not
-real auth -- there's no password, no persistence across sessions. If
-you need real accounts later, that's a separate, bigger piece.
+Spectators watch BOTH the real camera feed and the twin environment for
+whichever site they're following, and vote only on object IDENTITY: did
+the inner UGV's capture (label + OCR-read marker number) actually match
+what the twin claims lives at that location? Confirmed matches build a
+running `confirmed_objects` map -- the answer to "where is object 2" is
+just a lookup into that map, not a live query.
+
+WHAT WAS REMOVED FROM THE EARLIER TEAM-HUNT VERSION: teams, points,
+the leaderboard, and the live "+TARGET" photo-registration endpoint
+(objects are registered once, offline, before a run starts, via
+real_feed.state.register_target() -- see objects_registry.py). This is
+a deliberate narrative and scope change, not an oversight; a stale
+Site.team or Player.team field would silently reintroduce the old
+framing if left in.
 
 WebSocket message contract
 ---------------------------
 Server -> Client:
   {"type": "init", "phase", "sites": {site_id: {...}}, "players": [...],
-   "leaderboard", "team_scores", "chat_log", "activity_log", "targets"}
+   "confirmed_objects": {label: {...}}, "chat_log", "activity_log",
+   "alerts": [...]}
   {"type": "presence", "players": [...]}
   {"type": "join_rejected", "reason"}
   {"type": "activity", "text", "kind", "timestamp"}
   {"type": "site_update", "site_id", "telemetry"}
   {"type": "candidate", "site_id", "id", "label", "confidence",
    "instant_confidence", "waypoint", "is_registered_target", "timestamp",
-   "location_offset", "ocr_number", "ocr_anomaly"}
+   "location_offset", "ocr_number", "ocr_anomaly", "image",
+   "twin_semantic_label"}
   {"type": "vote_update", "site_id", "id", "confirms", "disputes"}
-  {"type": "match_confirmed", "site_id", "id", "label", "confidence",
-   "waypoint", "timestamp", "contributors", "points",
-   "location_offset", "ocr_number", "ocr_anomaly"}
-   {"type": "match_rejected", "site_id", "id", "label", "waypoint", "timestamp"}
-  {"type": "leaderboard", "entries", "team_scores"}
+  {"type": "match_confirmed", "site_id", "id", "label", "waypoint",
+   "timestamp", "contributors", "location_offset", "ocr_number",
+   "ocr_anomaly", "image", "twin_semantic_label"}
+  {"type": "match_rejected", "site_id", "id", "label", "waypoint", "timestamp"}
+  {"type": "alert", "id", "site_id", "site_owner", "site_role", "kind",
+   "position", "nearest_waypoint", "distance_m", "message", "timestamp"}
   {"type": "team_ping", "site_id", "player", "waypoint", "text", "timestamp"}
   {"type": "chat", "sender", "text", "timestamp"}
   {"type": "rate_limited", "action"}
   {"type": "followers_update", "site_id", "followers"}
-  {"type": "targets_update", "targets"}
   {"type": "collision_alert"|"collision_clear", "site_id", "timestamp"}
   {"type": "site_removed", "site_id"}
 
 Client -> Server:
-  {"type": "join", "name", "role" ("field_agent"|"spectator"), "team"
-   ("Alpha"|"Bravo"), "location" (field_agent only), "avatar"}
-  {"type": "site_report", "waypoints", "telemetry"}         (field agent's own site_agent.py only)
+  {"type": "join", "name", "role" ("field_agent"|"spectator"),
+   "site_role" ("inner"|"outer", field_agent only), "location", "avatar"}
+  {"type": "site_report", "waypoints", "telemetry"}    (field agent's own relay process only)
   {"type": "candidate_report", "label", "confidence", "instant_confidence",
    "waypoint", "is_registered_target", "location_offset", "ocr_number",
-   "ocr_anomaly"}  (field agent only -- location_offset/ocr_* are optional,
-   default to None if the sending site_agent.py predates this addition)
+   "ocr_anomaly", "image", "twin_semantic_label"}       (field agent only)
+  {"type": "alert_report", "kind", "position", "nearest_waypoint",
+   "distance_m", "message"}                              (field agent only)
   {"type": "vote", "site_id", "id", "vote"}
   {"type": "ping", "site_id", "waypoint", "text"}
   {"type": "chat", "text"}
   {"type": "follow", "site_id"}   (spectators only -- which feed they're watching)
   {"type": "safety_event", "event" ("collision_alert"|"collision_clear"), "timestamp"}  (field agent only)
 
-NOTE on location_offset/ocr_number/ocr_anomaly: these three fields are
-additive, per real_feed.py's Section 4/6 work -- location_offset is the
-waypoint+offset location of a sighting, ocr_number/ocr_anomaly are the
-OCR cross-check against OSNet's match (anomaly is only ever non-None
-when OCR actively DISAGREED with OSNet, never just "no OCR signal").
-The Hub never receives crop images for these (same same-machine-only
-image boundary as before) -- proof-gallery consumers (bounty_log) get
-the metadata, not the photo.
+NOTE on `image`: a small base64 JPEG, sent once per candidate at capture
+time (not every frame) -- reverses the earlier same-machine-only crop
+rule specifically to support the end-of-patrol proof gallery. Still
+bounded: only sent when a candidate is actually raised (gated by the
+existing cooldown/smoothing logic in real_feed.py), never per-tick.
 """
 
 import json
@@ -80,12 +90,11 @@ import uuid
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
 
@@ -93,11 +102,11 @@ app = FastAPI(title="QUARRY Mission Control -- Hub")
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 CONFIRM_THRESHOLD = 2
+DISPUTE_THRESHOLD = 2   # symmetric to CONFIRM_THRESHOLD, see the vote handler
 RATE_LIMIT_WINDOW_S = 5.0
 RATE_LIMIT_MAX_ACTIONS = 8  # votes + pings + chat combined, per player, per window
-TEAMS = ["Alpha", "Bravo"]
-DEFAULT_TARGET_POINTS = 100
-GENERIC_DETECTION_POINTS = 10  # a sighting that isn't a registered target
+SITE_ROLES = ("inner", "outer")
+ALERT_LOG_MAXLEN = 50
 
 
 def _slugify(name: str) -> str:
@@ -118,8 +127,9 @@ def _arena_position(site_id: str):
 
 
 class Candidate:
-    def __init__(self, label, confidence, waypoint, is_registered_target, site_id, instant_confidence=None,
-                 location_offset=None, ocr_number=None, ocr_anomaly=None):
+    def __init__(self, label, confidence, waypoint, is_registered_target, site_id,
+                 instant_confidence=None, location_offset=None, ocr_number=None,
+                 ocr_anomaly=None, image=None, twin_semantic_label=None):
         self.id = str(uuid.uuid4())[:8]
         self.site_id = site_id
         self.label = label
@@ -130,13 +140,11 @@ class Candidate:
         self.timestamp = datetime.now(timezone.utc).isoformat()
         self.votes: Dict[str, str] = {}
         self.status = "pending"
-        # Additive: waypoint+offset location (Section 5 Task 6) and OCR
-        # cross-check result (Section 4's locked identity rule). Both are
-        # computed on the Field Agent's own machine (real_feed.py) and
-        # relayed here as plain metadata -- the Hub never re-derives them.
         self.location_offset = location_offset
         self.ocr_number = ocr_number
         self.ocr_anomaly = ocr_anomaly
+        self.image = image                          # base64 JPEG or None
+        self.twin_semantic_label = twin_semantic_label  # what the twin claims is here
 
     def net_confirms(self):
         c = sum(1 for v in self.votes.values() if v == "confirm")
@@ -157,42 +165,42 @@ class Candidate:
             "location_offset": self.location_offset,
             "ocr_number": self.ocr_number,
             "ocr_anomaly": self.ocr_anomaly,
+            "image": self.image,
+            "twin_semantic_label": self.twin_semantic_label,
         }
 
 
 class Site:
-    def __init__(self, site_id: str, owner: str, location: str, team: str, waypoints: list):
+    def __init__(self, site_id: str, owner: str, location: str, role: str, waypoints: list):
         self.site_id = site_id
         self.owner = owner
         self.location = location
-        self.team = team
+        self.role = role  # "inner" | "outer"
         self.waypoints = waypoints
         self.telemetry = {}
         self.candidates: Dict[str, Candidate] = {}
-        self.followers: set = set()  # player names currently watching this feed
-        self.score = 0
+        self.followers: set = set()
 
     def to_dict(self):
         return {
             "site_id": self.site_id, "owner": self.owner, "location": self.location,
-            "team": self.team, "waypoints": self.waypoints, "telemetry": self.telemetry,
+            "role": self.role, "waypoints": self.waypoints, "telemetry": self.telemetry,
             "candidates": [c.to_dict() for c in self.candidates.values()],
-            "followers": list(self.followers), "score": self.score,
+            "followers": list(self.followers),
             "arena_position": _arena_position(self.site_id),
         }
 
 
 class Player:
-    def __init__(self, ws: WebSocket, name: str, role: str, team: str, location: Optional[str], avatar: str):
+    def __init__(self, ws: WebSocket, name: str, role: str, location: Optional[str], avatar: str):
         self.ws = ws
         self.player_id = str(uuid.uuid4())[:8]
         self.name = name
         self.role = role  # "field_agent" | "spectator"
-        self.team = team  # "Alpha" | "Bravo"
         self.location = location
         self.avatar = avatar
-        self.site_id: Optional[str] = None  # set once their Site is created, field agents only
-        self.following: Optional[str] = None  # site_id a spectator is currently watching
+        self.site_id: Optional[str] = None
+        self.following: Optional[str] = None
         self.connected = True
         self._action_times: deque = deque()
 
@@ -207,7 +215,7 @@ class Player:
 
     def to_dict(self):
         return {
-            "player_id": self.player_id, "name": self.name, "role": self.role, "team": self.team,
+            "player_id": self.player_id, "name": self.name, "role": self.role,
             "location": self.location, "avatar": self.avatar, "connected": self.connected,
             "following": self.following,
         }
@@ -217,51 +225,40 @@ class Hub:
     def __init__(self):
         self.players: Dict[WebSocket, Player] = {}
         self.sites: Dict[str, Site] = {}
-        self.bounty_log: List[dict] = []
-        self.leaderboard: Dict[str, int] = {}
         self.chat_log: deque = deque(maxlen=200)
         self.activity_log: deque = deque(maxlen=200)
-        self.targets: Dict[str, dict] = {}  # name -> {"note", "points"}
+        self.alerts: deque = deque(maxlen=ALERT_LOG_MAXLEN)
+        # The actual "where is object N" answer -- keyed by the object's
+        # registered label (e.g. "object-02"), populated as each object
+        # gets confirmed. This IS the end-of-patrol proof gallery's data
+        # source; no separate storage needed.
+        self.confirmed_objects: Dict[str, dict] = {}
 
     def taken_names(self):
         return {p.name.lower() for p in self.players.values()}
 
-    def leaderboard_sorted(self):
-        return sorted(
-            [{"name": n, "score": s} for n, s in self.leaderboard.items()],
-            key=lambda e: -e["score"],
-        )
-
-    def team_scores_sorted(self):
-        totals = {team: 0 for team in TEAMS}
+    def inner_site(self) -> Optional[Site]:
+        """Returns the first site with role 'inner', or None if no inner
+        UGV is currently connected. Used to fold the inner UGV's current
+        position into an outer UGV's intruder alert message. If somehow
+        more than one site claims 'inner' (shouldn't happen in normal
+        use -- the mission has one real inner UGV), the first one found
+        wins; this isn't validated/rejected at join time because a
+        misconfigured second inner agent is a demo-setup mistake, not a
+        security boundary."""
         for site in self.sites.values():
-            if site.team in totals:
-                totals[site.team] += site.score
-        return sorted(
-            [{"team": t, "score": s} for t, s in totals.items()],
-            key=lambda e: -e["score"],
-        )
-
-    def points_for(self, label: str, is_registered_target: bool) -> int:
-        if is_registered_target and label in self.targets:
-            return self.targets[label].get("points", DEFAULT_TARGET_POINTS)
-        return GENERIC_DETECTION_POINTS
+            if site.role == "inner":
+                return site
+        return None
 
     def snapshot(self):
         return {
             "sites": {sid: s.to_dict() for sid, s in self.sites.items()},
             "players": [p.to_dict() for p in self.players.values()],
-            "leaderboard": self.leaderboard_sorted(),
-            "team_scores": self.team_scores_sorted(),
             "chat_log": list(self.chat_log),
             "activity_log": list(self.activity_log),
-            "targets": self.targets,
-            # bounty_log doubles as the proof gallery's data source (Section 5
-            # Task 9): each entry already carries location_offset/ocr_number/
-            # ocr_anomaly alongside label/waypoint/contributors/points, added
-            # at confirm time below. No crop image travels with it -- that
-            # stays same-machine-only per the existing architecture boundary.
-            "bounty_log": self.bounty_log[:50],
+            "alerts": list(self.alerts),
+            "confirmed_objects": self.confirmed_objects,
         }
 
 
@@ -304,12 +301,12 @@ async def ws_endpoint(websocket: WebSocket):
             # -- join must happen before anything else -------------------
             if msg_type == "join":
                 if player is not None:
-                    continue  # already joined this connection
+                    continue
                 name = (msg.get("name") or "").strip()[:24]
                 role = msg.get("role") if msg.get("role") in ("field_agent", "spectator") else "spectator"
-                team = msg.get("team") if msg.get("team") in TEAMS else TEAMS[0]
                 location = (msg.get("location") or "").strip()[:40] if role == "field_agent" else None
-                avatar = (msg.get("avatar") or "◈").strip()[:4]
+                avatar = (msg.get("avatar") or "\u25c8").strip()[:4]
+                site_role = msg.get("site_role") if msg.get("site_role") in SITE_ROLES else None
 
                 if not name:
                     await websocket.send_text(json.dumps({"type": "join_rejected", "reason": "Name required."}))
@@ -324,23 +321,29 @@ async def ws_endpoint(websocket: WebSocket):
                         "type": "join_rejected", "reason": "Field Agents must set a location label."
                     }))
                     continue
+                if role == "field_agent" and site_role is None:
+                    await websocket.send_text(json.dumps({
+                        "type": "join_rejected",
+                        "reason": "Field Agents must choose Inner or Outer.",
+                    }))
+                    continue
 
-                player = Player(websocket, name, role, team, location, avatar)
+                player = Player(websocket, name, role, location, avatar)
                 hub.players[websocket] = player
 
                 if role == "field_agent":
                     site_id = _slugify(name)
-                    hub.sites[site_id] = Site(site_id, owner=name, location=location, team=team, waypoints=[])
+                    hub.sites[site_id] = Site(site_id, owner=name, location=location, role=site_role, waypoints=[])
                     player.site_id = site_id
 
                 await websocket.send_text(json.dumps({"type": "init", **hub.snapshot(), "your_player_id": player.player_id}))
                 await broadcast_presence()
-                role_label = f"Field Agent ({location}, Team {team})" if role == "field_agent" else f"Spectator (Team {team})"
+                role_label = f"{site_role.title()} Field Agent ({location})" if role == "field_agent" else "Spectator"
                 await log_activity(f"{name} joined as {role_label}.", "join")
                 continue
 
             if player is None:
-                continue  # ignore everything until joined
+                continue
 
             # -- field-agent-only: reporting their own site's live data ---
             if msg_type == "site_report" and player.role == "field_agent" and player.site_id:
@@ -359,9 +362,40 @@ async def ws_endpoint(websocket: WebSocket):
                     location_offset=msg.get("location_offset"),
                     ocr_number=msg.get("ocr_number"),
                     ocr_anomaly=msg.get("ocr_anomaly"),
+                    image=msg.get("image"),
+                    twin_semantic_label=msg.get("twin_semantic_label"),
                 )
                 hub.sites[player.site_id].candidates[candidate.id] = candidate
                 await broadcast(candidate.to_dict())
+                continue
+
+            if msg_type == "alert_report" and player.role == "field_agent" and player.site_id:
+                site = hub.sites[player.site_id]
+                inner = hub.inner_site()
+                inner_note = (
+                    f" Inner UGV last at {inner.telemetry.get('position')}."
+                    if inner and inner.site_id != site.site_id and inner.telemetry.get("position")
+                    else ""
+                )
+                alert = {
+                    "type": "alert",
+                    "id": str(uuid.uuid4())[:8],
+                    "site_id": site.site_id,
+                    "site_owner": site.owner,
+                    "site_role": site.role,
+                    "kind": msg.get("kind", "intruder"),
+                    "position": msg.get("position"),
+                    "nearest_waypoint": msg.get("nearest_waypoint"),
+                    "distance_m": msg.get("distance_m"),
+                    "message": (msg.get("message") or "").strip()[:200] + inner_note,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                hub.alerts.appendleft(alert)
+                await broadcast(alert)
+                await log_activity(
+                    f"\u26a0 ALERT -- {site.owner} ({site.role}) reported {alert['kind']} "
+                    f"near {alert['nearest_waypoint']}", "danger",
+                )
                 continue
 
             if msg_type == "safety_event" and player.role == "field_agent" and player.site_id:
@@ -372,7 +406,7 @@ async def ws_endpoint(websocket: WebSocket):
                     "type": event, "site_id": player.site_id,
                     "timestamp": msg.get("timestamp", time.time()),
                 })
-                continue    
+                continue
 
             # -- rate-limited actions available to everyone ---------------
             if msg_type in ("vote", "ping", "chat") and player.rate_limited():
@@ -404,7 +438,6 @@ async def ws_endpoint(websocket: WebSocket):
                 site_id = msg.get("site_id")
                 if site_id not in hub.sites:
                     continue
-                # remove from whichever site they were following before
                 if player.following and player.following in hub.sites:
                     hub.sites[player.following].followers.discard(player.name)
                     await broadcast({"type": "followers_update", "site_id": player.following,
@@ -433,37 +466,29 @@ async def ws_endpoint(websocket: WebSocket):
                 if candidate.net_confirms() >= CONFIRM_THRESHOLD:
                     candidate.status = "confirmed"
                     contributors = [p for p, v in candidate.votes.items() if v == "confirm"]
-                    points = hub.points_for(candidate.label, candidate.is_registered_target)
                     entry = {
                         "site_id": site_id, "id": candidate.id, "label": candidate.label,
-                        "confidence": candidate.confidence, "waypoint": candidate.waypoint,
-                        "timestamp": candidate.timestamp, "contributors": contributors, "points": points,
+                        "waypoint": candidate.waypoint, "timestamp": candidate.timestamp,
+                        "contributors": contributors,
                         "location_offset": candidate.location_offset,
                         "ocr_number": candidate.ocr_number,
                         "ocr_anomaly": candidate.ocr_anomaly,
+                        "image": candidate.image,
+                        "twin_semantic_label": candidate.twin_semantic_label,
                     }
-                    hub.bounty_log.insert(0, entry)
-                    hub.bounty_log = hub.bounty_log[:50]
-                    for name in contributors:
-                        hub.leaderboard[name] = hub.leaderboard.get(name, 0) + points
-                    site.score += points  # credits the Field Agent's team, not just voters
+                    # The actual "where is object N" answer, keyed by label --
+                    # overwritten on re-confirmation if a target is somehow
+                    # confirmed twice, which is fine, the latest is the truth.
+                    hub.confirmed_objects[candidate.label] = entry
                     del site.candidates[candidate.id]
                     await broadcast({"type": "match_confirmed", **entry})
-                    await broadcast({"type": "leaderboard", "entries": hub.leaderboard_sorted(),
-                                       "team_scores": hub.team_scores_sorted()})
                     anomaly_note = f" [OCR ANOMALY: {candidate.ocr_anomaly}]" if candidate.ocr_anomaly else ""
                     await log_activity(
-                        f'TARGET CONFIRMED -- "{candidate.label}" @ {candidate.waypoint} '
-                        f"({site.owner}'s site, Team {site.team}) by {', '.join(contributors)} -- +{points} pts"
-                        f"{anomaly_note}",
+                        f'CONFIRMED -- "{candidate.label}" @ {candidate.waypoint} '
+                        f"({site.owner}'s site) by {', '.join(contributors)}{anomaly_note}",
                         "match",
                     )
-                elif candidate.net_confirms() <= -CONFIRM_THRESHOLD:
-                    # Previously missing entirely -- a disputed candidate just sat
-                    # "pending" forever with no resolution. Symmetric to the confirm
-                    # threshold above. This is also the foundation for the ML
-                    # data-flywheel: a rejected sighting is a human-verified hard
-                    # negative, exactly as valuable as a confirmed one is a positive.
+                elif candidate.net_confirms() <= -DISPUTE_THRESHOLD:
                     candidate.status = "rejected"
                     del site.candidates[candidate.id]
                     await broadcast({
@@ -491,33 +516,11 @@ async def ws_endpoint(websocket: WebSocket):
             await log_activity(f"{player.name} disconnected.", "leave")
 
 
-@app.post("/api/targets")
-async def register_target(name: str = Form(...), note: str = Form(""), points: int = Form(DEFAULT_TARGET_POINTS),
-                            photo: UploadFile = File(None)):
-    # Global target registry across the hub for now -- per-site re-id
-    # embeddings are a real follow-up piece, not solved in this pass.
-    hub.targets[name] = {"note": note, "points": max(1, min(1000, points))}
-    photo_info = {"filename": photo.filename, "content_type": photo.content_type} if photo else None
-    await broadcast({"type": "targets_update", "targets": hub.targets})
-    return {"status": "registered", "name": name, "points": hub.targets[name]["points"], "photo": photo_info}
-
-
 @app.get("/api/state")
 async def get_state():
     return hub.snapshot()
 
 
-# /css mount removed -- style.css was deleted when index.html/dashboard.html
-# moved to inline <style> blocks, so frontend/css no longer exists.
-# /js mount kept -- map3d.js still lives there (unused but not yet removed,
-# per earlier decision to hold off deleting it).
-app.mount("/js", StaticFiles(directory=FRONTEND_DIR / "js"), name="js")
-
-
 @app.get("/")
 async def index():
     return FileResponse(FRONTEND_DIR / "index.html")
-
-@app.get("/dashboard")
-async def dashboard():
-    return FileResponse(FRONTEND_DIR / "dashboard.html")
