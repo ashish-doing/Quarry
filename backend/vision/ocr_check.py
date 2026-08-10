@@ -25,6 +25,8 @@ Usage:
 """
 
 import logging
+import os
+import platform
 import re
 from dataclasses import dataclass
 from typing import Optional
@@ -32,6 +34,19 @@ from typing import Optional
 import numpy as np
 
 logger = logging.getLogger("quarry.vision.ocr_check")
+
+# Common Windows install locations for the UB-Mannheim Tesseract build.
+# pytesseract only finds the binary via PATH -- on Windows that's easy to
+# get wrong (the installer doesn't always add it, or a PATH change made
+# via SetEnvironmentVariable needs a fresh terminal to take effect, which
+# is easy to miss under demo-day time pressure). Tried ONLY as a fallback
+# if the binary isn't already resolvable via PATH -- this never overrides
+# a working PATH-based setup, and the platform check means it's a no-op
+# on Linux/Mac.
+_WINDOWS_FALLBACK_PATHS = [
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+]
 
 # Tesseract's page-segmentation mode 7 = "treat the image as a single text
 # line" -- the right mode for a bold, isolated marker digit rather than a
@@ -66,16 +81,38 @@ class MarkerOCR:
             # otherwise surface as a confusing per-frame exception later.
             pytesseract.get_tesseract_version()
             logger.info("Tesseract OCR available (%s)", pytesseract.get_tesseract_version())
+            return
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Tesseract OCR unavailable (%s) -- OCR cross-check disabled, "
-                "candidates will be raised on OSNet match alone with no anomaly "
-                "flagging. On Windows: install the Tesseract binary separately "
-                "(UB-Mannheim build is the common choice) and either add it to "
-                "PATH or set pytesseract.pytesseract.tesseract_cmd explicitly.",
-                exc,
-            )
-            self._pytesseract = None
+            path_exc = exc
+
+        # PATH resolution failed -- on Windows, try the common UB-Mannheim
+        # install locations directly before giving up. This is a fallback
+        # ONLY: it doesn't run at all on other platforms, and it only
+        # fires because the PATH-based attempt above already failed.
+        if platform.system() == "Windows":
+            for candidate in _WINDOWS_FALLBACK_PATHS:
+                if os.path.isfile(candidate):
+                    try:
+                        self._pytesseract.pytesseract.tesseract_cmd = candidate
+                        self._pytesseract.get_tesseract_version()
+                        logger.info(
+                            "Tesseract OCR available via fallback path %s "
+                            "(not found on PATH -- consider fixing PATH so this "
+                            "fallback isn't relied on long-term)", candidate,
+                        )
+                        return
+                    except Exception:  # noqa: BLE001 -- try the next candidate
+                        continue
+
+        logger.warning(
+            "Tesseract OCR unavailable (%s) -- OCR cross-check disabled, "
+            "candidates will be raised on OSNet match alone with no anomaly "
+            "flagging. On Windows: install the Tesseract binary separately "
+            "(UB-Mannheim build is the common choice) and either add it to "
+            "PATH or set pytesseract.pytesseract.tesseract_cmd explicitly.",
+            path_exc,
+        )
+        self._pytesseract = None
 
     @property
     def available(self) -> bool:
