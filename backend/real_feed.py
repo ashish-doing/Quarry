@@ -49,17 +49,20 @@ from backend.nav_math import location_offset as _nav_location_offset
 logger = logging.getLogger("quarry.real_feed")
 
 # ---------------------------------------------------------------------------
-# Tag-to-waypoint mapping is now fixed (see apriltag_detector.py): tags
-# 0-5 map 1:1 to W1-W6, tags 6-7 are reserved as fixed origin/reference
-# markers used to establish the room's coordinate frame -- NOT waypoints
-# themselves. x/y below are STILL PLACEHOLDER until measure_waypoints.py
-# is run at the actual venue and the recorded tag positions are converted
-# into this same (x, y) frame. Keep the same units/frame as get_pose()
-# returns -- do not just paste measure_waypoints.py's raw output here,
-# that's in the CAMERA's frame relative to two reference tags, not
-# get_pose()'s frame. The conversion between those two frames is real
-# work that hasn't been done yet; measure_waypoints.py's README section
-# explains why it can't do that conversion for you automatically.
+# Tag-to-waypoint mapping: all 8 printed tags (0-7) are now waypoints --
+# there are no separate fixed-reference tags. The room's coordinate frame
+# is instead anchored to the robot's own start position (get_pose() at
+# the moment measure_waypoints.py begins is treated as the origin) -- a
+# deliberate venue-setup decision, since 8 objects needed 8 real waypoints
+# and there was no tag budget left for dedicated reference markers. x/y
+# below are STILL PLACEHOLDER until measure_waypoints.py is run at the
+# actual venue and the recorded tag positions are converted into this
+# same (x, y) frame. Keep the same units/frame as get_pose() returns --
+# do not just paste measure_waypoints.py's raw output here, that's in the
+# CAMERA's frame relative to wherever the robot was pointed at each
+# recording, not get_pose()'s frame. That conversion is real, manual work
+# -- measure_waypoints.py's own docstring explains why it doesn't attempt
+# it automatically.
 # ---------------------------------------------------------------------------
 WAYPOINTS = [
     {"id": "W1", "tag_id": 0, "x": 15, "y": 20},   # still placeholder -- see note above
@@ -68,8 +71,9 @@ WAYPOINTS = [
     {"id": "W4", "tag_id": 3, "x": 82, "y": 65},
     {"id": "W5", "tag_id": 4, "x": 48, "y": 80},
     {"id": "W6", "tag_id": 5, "x": 14, "y": 62},
+    {"id": "W7", "tag_id": 6, "x": 50, "y": 50},   # placeholder -- pick real numbers once
+    {"id": "W8", "tag_id": 7, "x": 30, "y": 40},   # measure_waypoints.py has been run
 ]
-REFERENCE_TAG_IDS = (6, 7)  # fixed origin markers, not patrol waypoints -- place these FIRST at venue
 WAYPOINT_SNAP_RADIUS = 9999  # TEMP: testing detection only, ignore waypoint gating for now
 
 ENVIRONMENT_ID = os.environ.get("CYBERWAVE_ENVIRONMENT_ID", "9383b6b2-0df7-4e99-8d9e-8a352eb6e1ab")
@@ -191,6 +195,12 @@ class RealRobotState:
         self.twin = None
         self.detector = YoloeDetector()
         self.matcher = TargetMatcher()
+        # Load whatever register_mission_objects.py saved offline -- the
+        # normal case for a mission run, where objects were registered in
+        # a separate, earlier process. A missing gallery file just means
+        # "nothing registered yet," logged at info level, not an error --
+        # see TargetMatcher.load_gallery()'s own docstring.
+        self.matcher.load_gallery()
         self.guard: Optional[CollisionGuard] = None  # created once twin is connected
 
         # OCR cross-check + sequential-object registry -- both additive,
