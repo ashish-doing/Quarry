@@ -1,24 +1,42 @@
 """
-measure_waypoints.py -- interactive venue tool. Run this AT the demo room,
-after calibrate_camera.py (against --source twin) and after the two
-reference tags (IDs 6, 7) are taped to two fixed points in the room.
+measure_waypoints.py -- interactive venue tool. Run this AT the demo
+room, after calibrate_camera.py (against --source twin) and after all
+8 AprilTags are placed at their intended waypoint locations.
 
-What this actually does: shows live AprilTag detections with distance/
-offset from the camera. You physically position the robot at each
-waypoint location, tape/place that waypoint's tag where you want it, and
-press its number key to record the tag's position AT THAT MOMENT relative
-to the two reference tags. This does NOT convert to the exact same (x, y)
-frame get_pose() uses internally -- that mapping is a real follow-up
-(see real_feed.py's own honesty note on get_pose()'s quaternion). What
-this DOES give you: real, physically-verified positions of the 6
-waypoints relative to two fixed, known room points, in meters -- enough
-to sanity-check whatever get_pose() reports once you're driving, and to
-catch a gross sign/scale error before trusting the patrol pattern.
+APPROACH (changed from the earlier two-reference-tag design): with 8
+objects needing 8 real waypoints, there was no tag budget left for
+dedicated anchor tags, so this uses a simpler procedure instead --
+DRIVE-AND-CENTER. For each waypoint: physically drive QUARRY (via a
+separate teleop.py session running alongside this script) until it is
+centered directly on that waypoint's tag -- the same physical act it
+will do autonomously later when navigating there for real -- then press
+that tag's number key. This script records get_pose()'s (x, y) at that
+exact moment as the waypoint's position. The live AprilTag detection
+shown on screen is a CONFIRMATION aid only ("yes, I'm centered on tag
+3") -- it is not used as a measurement input.
+
+WHY NOT compute each tag's room position from its camera-relative
+AprilTag reading instead (avoiding the need to physically drive to
+each one)? That fusion requires knowing the robot's heading (yaw) at
+the moment of each reading, to rotate the camera-relative offset into
+the room frame. This project deliberately never converts get_pose()'s
+rotation quaternion into yaw -- see real_feed.py's _refresh_telemetry
+comment, "guessed here after getting pose wrong once already." Rather
+than reopen that question for this tool, drive-and-center sidesteps it
+entirely: it only ever needs get_pose()'s (x, y), never its rotation.
+
+IF A TAG IS PHYSICALLY UNREACHABLE (blocked by furniture, wanted
+visible-but-not-approached for the demo layout): there is no automated
+fallback for that case in this script. Measure it by hand (tape
+measure, relative to a waypoint you did record) and hand-edit that
+one entry in the saved JSON before pasting into real_feed.py.
 
 Usage:
-    python measure_waypoints.py
+    python -m backend.vision.measure_waypoints
+    (run teleop.py in a separate terminal/window to actually drive --
+    this script only records, it never sends movement commands)
 Controls:
-    0-7  : record the currently-detected tag with that ID
+    0-7  : record get_pose() as the currently-centered tag's waypoint
     p    : print current recorded set
     s    : save recorded set to waypoint_measurements.json
     q    : quit
@@ -30,9 +48,10 @@ import os
 import cv2
 from dotenv import load_dotenv
 
-from apriltag_detector import AprilTagDetector, WAYPOINT_TAG_IDS, REFERENCE_TAG_IDS
+from backend.vision.apriltag_detector import AprilTagDetector, WAYPOINT_TAG_IDS
+from backend.real_feed import ASSET_KEY, ENVIRONMENT_ID, TWIN_NAME
 
-OUTPUT_PATH = os.path.join(os.path.dirname(__file__), "waypoint_measurements.json")
+OUTPUT_PATH = os.path.join(os.path.dirname(__file__), "..", "waypoint_measurements.json")
 
 
 def main():
@@ -45,26 +64,26 @@ def main():
 
     import cyberwave
     cyberwave.configure(api_key=os.environ["CYBERWAVE_API_KEY"])
-    env_id = os.environ.get("CYBERWAVE_ENVIRONMENT_ID", "9383b6b2-0df7-4e99-8d9e-8a352eb6e1ab")
-    t = cyberwave.twin("waveshare/ugv-beast", environment=env_id, name="QUARRY")
+    t = cyberwave.twin(ASSET_KEY, environment=ENVIRONMENT_ID, name=TWIN_NAME)
 
     recorded = {}
-    print("Live AprilTag view. Position the robot, press the tag's ID key to record it.")
-    print(f"Waypoint tags: {WAYPOINT_TAG_IDS} | Reference tags: {REFERENCE_TAG_IDS}")
-    print("Record BOTH reference tags (6, 7) FIRST -- everything else is measured relative to them.")
+    print("Drive QUARRY (teleop.py, separate window) to center on each tag in turn,")
+    print("then press that tag's ID key here to record get_pose() as its waypoint.")
+    print(f"Waypoint tags: {WAYPOINT_TAG_IDS}")
+    print("No reference tags needed -- get_pose() itself is the shared coordinate frame.\n")
 
     while True:
         frame = t.get_frame("numpy", source="remote_edge")
         if frame is None:
             continue
-        detections = detector.detect(frame)
+        detections = detector.detect(frame)  # on-screen confirmation only, not a measurement input
 
         bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         for d in detections:
             label = detector.label_for(d.tag_id)
             recorded_mark = " [RECORDED]" if d.tag_id in recorded else ""
-            print(f"\r  tag {d.tag_id} ({label}): x={d.x_m:+.3f}m y={d.y_m:+.3f}m "
-                  f"dist={d.distance_m:.3f}m{recorded_mark}   ", end="", flush=True)
+            print(f"\r  tag {d.tag_id} ({label}): dist={d.distance_m:.3f}m{recorded_mark}   ",
+                  end="", flush=True)
             corner_pts = d.corners.astype(int)
             cv2.polylines(bgr, [corner_pts], True, (0, 255, 0), 2)
             cv2.putText(bgr, f"{label} {d.distance_m:.2f}m", tuple(corner_pts[0]),
@@ -83,26 +102,38 @@ def main():
             print(f"\nSaved {len(recorded)} measurements to {OUTPUT_PATH}")
         elif chr(key).isdigit():
             tag_id = int(chr(key))
-            match = next((d for d in detections if d.tag_id == tag_id), None)
-            if match is None:
-                print(f"\n  tag {tag_id} not currently visible -- point the camera at it first")
+            if tag_id not in WAYPOINT_TAG_IDS:
+                print(f"\n  tag {tag_id} is not one of the 8 waypoint tags -- ignored")
                 continue
+            visible = any(d.tag_id == tag_id for d in detections)
+            if not visible:
+                print(f"\n  tag {tag_id} not currently visible -- drive/center the robot on it first "
+                      f"(this is just a confirmation check, the tag's own reading isn't recorded)")
+                continue
+            pose = t.get_pose()
+            pos = pose.get("position", {})
+            x, y = pos.get("x", 0.0), pos.get("y", 0.0)
             recorded[tag_id] = {
-                "label": detector.label_for(tag_id),
-                "x_m": match.x_m, "y_m": match.y_m, "z_m": match.z_m,
-                "distance_m": match.distance_m,
+                "id": WAYPOINT_TAG_IDS[tag_id],
+                "tag_id": tag_id,
+                "x": round(x, 3),
+                "y": round(y, 3),
             }
-            print(f"\n  recorded tag {tag_id} ({detector.label_for(tag_id)})")
+            print(f"\n  recorded {WAYPOINT_TAG_IDS[tag_id]} (tag {tag_id}) at get_pose() ({x:.3f}, {y:.3f})")
 
     cv2.destroyAllWindows()
     if recorded:
         with open(OUTPUT_PATH, "w") as f:
             json.dump(recorded, f, indent=2)
         print(f"\nFinal save: {len(recorded)} measurements -> {OUTPUT_PATH}")
-        print("\nNext step: use the two reference-tag positions (6, 7) to work out the "
-              "offset/rotation into whatever frame get_pose() reports, then hand-fill "
-              "real_feed.py's WAYPOINTS x/y. This script gives you ground truth to check "
-              "that conversion against -- it does not do the conversion for you.")
+        missing = [wp for tid, wp in WAYPOINT_TAG_IDS.items() if tid not in recorded]
+        if missing:
+            print(f"NOT recorded this session: {missing} -- measure these by hand if the "
+                  f"robot couldn't physically reach them, then hand-edit the JSON.")
+        print("\nNext step: these x/y values are ALREADY in get_pose()'s frame -- no manual "
+              "conversion needed this time (drive-and-center sidesteps that entirely). Copy "
+              "each {\"id\", \"x\", \"y\"} straight into real_feed.py's WAYPOINTS list, replacing "
+              "the matching placeholder entry.")
 
 
 if __name__ == "__main__":

@@ -8,15 +8,28 @@ looks plausible, which is worse than an obvious failure. Same honesty
 posture as detector.py: if the intrinsics file is missing, this refuses
 to fabricate a pose rather than guessing focal length from FOV metadata.
 
-Tag ID plan (8 tags printed, 6 waypoints):
-  IDs 0-5  -> W1-W6 (patrol waypoints, per real_feed.py's WAYPOINTS list)
-  IDs 6-7  -> RESERVED as fixed origin/reference markers. Place these two
-              at known, fixed points in the venue (e.g. two room corners)
-              BEFORE measuring anything else -- they define the world
-              coordinate frame that all other waypoint measurements are
-              made relative to. Skipping this and eyeballing each
-              waypoint's (x, y) independently is how small errors compound
-              into a patrol pattern that drifts from what the map shows.
+Tag ID plan (8 tags printed, 8 waypoints, 1:1):
+  IDs 0-7 -> W1-W8 (patrol waypoints, per real_feed.py's WAYPOINTS list).
+  There are no dedicated reference/anchor tags -- an earlier plan
+  reserved two tags (IDs 6-7) for that, but with 8 real objects needing
+  8 real waypoints there was no tag budget left for anchors. The room's
+  coordinate frame is instead anchored to get_pose() itself: since
+  get_pose() already returns a continuous position readout in one
+  consistent global frame from the moment odometry starts, that IS the
+  shared reference -- no separate physical anchor tags needed. See
+  measure_waypoints.py for how this plays out in practice (drive-and-
+  center, not camera-relative geometry).
+
+Detection here is still useful for on-screen CONFIRMATION during
+measurement ("yes, I'm centered on tag 3") -- it's just not used as a
+measurement INPUT anymore the way the old reference-tag approach used
+camera-relative offsets. See measure_waypoints.py's module docstring for
+the full reasoning, including why the alternative (fusing AprilTag's
+camera-relative reading with get_pose() via a rotation matrix) was
+considered and rejected: it needs yaw, and this project deliberately
+never converts get_pose()'s quaternion to yaw (see real_feed.py's
+_refresh_telemetry comment) -- guessing that conversion wrong once
+already cost more than it was worth.
 
 Usage:
     detector = AprilTagDetector()
@@ -35,8 +48,8 @@ import numpy as np
 logger = logging.getLogger("quarry.vision.apriltag")
 
 TAG_SIZE_M = 0.100  # 100mm, matches the printed sheet -- change here if you reprint at a different size
-WAYPOINT_TAG_IDS = {0: "W1", 1: "W2", 2: "W3", 3: "W4", 4: "W5", 5: "W6"}
-REFERENCE_TAG_IDS = {6: "origin_A", 7: "origin_B"}
+WAYPOINT_TAG_IDS = {0: "W1", 1: "W2", 2: "W3", 3: "W4", 4: "W5", 5: "W6", 6: "W7", 7: "W8"}
+REFERENCE_TAG_IDS = {}  # dropped entirely -- no dedicated anchor tags, see module docstring
 
 DEFAULT_INTRINSICS_PATH = os.path.join(os.path.dirname(__file__), "camera_intrinsics.json")
 
@@ -48,9 +61,9 @@ class AprilTagDetection:
         self.tag_id = tag_id
         # translation is [x, y, z] in the CAMERA's frame, meters, from the
         # detector's own solvePnP-equivalent -- z is depth (distance along
-        # the optical axis), x/y are lateral offset. This is NOT yet in
-        # room/world coordinates -- that transform needs the two reference
-        # tags placed and measured first (see module docstring).
+        # the optical axis), x/y are lateral offset. NOT room/world
+        # coordinates, and (per the module docstring) not converted into
+        # them either -- this is display/confirmation data only now.
         self.x_m = float(translation[0])
         self.y_m = float(translation[1])
         self.z_m = float(translation[2])
