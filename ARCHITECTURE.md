@@ -2,17 +2,21 @@
 
 ## Overview
 
-QUARRY is a multi-site, multiplayer autonomous target-hunting platform built on a real, named
-ML problem underneath the game mechanic: **human-in-the-loop verification to reduce false
-positives in autonomous vision**. Any number of Field Agents run their own Waveshare UGV Beast
-(Pi 4B + ESP32, vision-only, no lidar) in their own physical space; Spectators join a shared
-session with zero hardware to watch any feed and vote to confirm sightings. Every vote is a
-human-verified label — the multiplayer mechanic is the incentive structure for fast,
-high-quality labels, not the point of the system. YOLOE-26 does open-vocabulary detection,
-OSNet does appearance-based re-identification, and confirmed/disputed votes feed a data
-flywheel toward re-id fine-tuning. Two independent safety layers (driver watchdog +
-CollisionGuard) run regardless of whether a match is active. Built for Cyberwave Builders
-Program, Cohort 2.
+QUARRY is a co-op recon platform built on a real, named ML problem
+underneath the mission framing: **human-in-the-loop verification to
+reduce false positives in autonomous vision**. One INNER UGV (a real
+Waveshare UGV Beast, vision-only, no lidar) runs the actual objective —
+an autonomous sequential survey of 8 numbered objects. Any number of
+OUTER UGVs, other people's real hardware in their own spaces, patrol as
+overwatch: sharing live position with the inner UGV and raising an
+immediate alert if their own vision spots an unregistered person.
+Spectators watch the inner UGV's real camera feed alongside the
+Cyberwave twin environment and vote only on object identity — does what
+the inner UGV actually found match what the twin claims is there?
+Confirmed/disputed votes feed a re-identification fine-tuning pipeline.
+Two independent safety layers (driver watchdog + CollisionGuard) run
+regardless of mission phase. Built for Cyberwave Builders Program,
+Cohort 2.
 
 ---
 
@@ -20,180 +24,207 @@ Program, Cohort 2.
 
 ```mermaid
 flowchart TD
-    subgraph FIELDAGENT["🤖 FIELD AGENT LAYER (their machine, their robot)"]
-        UGV["UGV Beast\n━━━━━━━━━━━━━━━\n• Pi 4B + ESP32\n• vision-only, no lidar\n• 5MP USB cam, ~90° HFOV"]
-        SDK["Cyberwave Python SDK\n━━━━━━━━━━━━━━━\n• get_frame(remote_edge)\n• get_pose() — quaternion\n• set_pose() — twin sync\n• publish_command('stop')"]
-        RF["real_feed.py\n━━━━━━━━━━━━━━━\n• YOLOE-26 detection\n• temporal smoothing (3/5)\n• EMA confidence\n• OSNet re-id matching\n• waypoint snapping"]
-        SA["site_agent.py\n━━━━━━━━━━━━━━━\n• Hub WebSocket relay\n• local annotated feed :8099\n• CollisionGuard host\n• data flywheel capture"]
-        CTRL["Drive scripts\n━━━━━━━━━━━━━━━\n• teleop.py (gamepad)\n• patrol.py (sweep + coverage)\n• voice_control.py (Whisper)"]
-        UGV -->|MQTT via edge-core| SDK
-        SDK --> RF
-        RF --> SA
-        CTRL -->|direct SDK calls, never via Hub| SDK
+    subgraph INNER["🎯 INNER UGV LAYER (the actual mission)"]
+        IUGV["UGV Beast\n━━━━━━━━━━━━━━━\n• Pi 4B + ESP32\n• vision-only, no lidar\n• 5MP USB cam, ~90° HFOV"]
+        ISDK["Cyberwave Python SDK\n━━━━━━━━━━━━━━━\n• get_frame(remote_edge)\n• get_pose() — position only, quaternion unconverted\n• set_pose() — twin sync\n• move_forward/turn_left/turn_right"]
+        IA["inner_agent.py\n━━━━━━━━━━━━━━━\n• motion-derived heading nav\n• framing gate before capture\n• YOLOE-26 + OSNet + OCR cross-check\n• Hub relay, merged into one process\n• CollisionGuard"]
+        IUGV -->|MQTT via edge-core| ISDK
+        ISDK --> IA
     end
 
-    subgraph VISION["👁️ VISION PIPELINE"]
-        DET["YoloeDetector\n━━━━━━━━━━━━━━━\n~40-word vocabulary\nper-label confidence floors\nperson: 0.65, default: 0.45"]
-        REID["TargetMatcher (OSNet)\n━━━━━━━━━━━━━━━\nosnet_x0_25, frozen backbone\nmulti-photo gallery (3-5 angles)\nbest-of-gallery cosine match"]
-        APRIL["AprilTag pipeline\n━━━━━━━━━━━━━━━\ncalibrate_camera.py\napriltag_detector.py\nmeasure_waypoints.py\ntag36h11, 8 tags, 100mm"]
-        GUARD["CollisionGuard\n━━━━━━━━━━━━━━━\nbbox-area proximity proxy\n30% frame = stop\n0.15s check interval"]
+    subgraph OUTER["👁️ OUTER UGV LAYER (overwatch, other people's hardware)"]
+        OUGV["UGV Beast(s)\n their own space"]
+        OSDK["Cyberwave Python SDK"]
+        RF["real_feed.py\n━━━━━━━━━━━━━━━\nshared CV/telemetry core --\nused by BOTH inner_agent.py\nand site_agent.py"]
+        SA["site_agent.py\n━━━━━━━━━━━━━━━\n• Hub WebSocket relay\n• local annotated feed\n• intruder watch\n• CollisionGuard host"]
+        CTRL["Drive scripts\n━━━━━━━━━━━━━━━\n• teleop.py (gamepad)\n• voice_control.py (Whisper)"]
+        OUGV -->|MQTT via edge-core| OSDK
+        OSDK --> RF
+        RF --> SA
+        CTRL -->|direct SDK calls, never via Hub| OSDK
+    end
+
+    subgraph VISION["🔍 SHARED VISION PIPELINE (real_feed.py)"]
+        DET["YoloeDetector\n━━━━━━━━━━━━━━━\n~40-word vocabulary\nper-label confidence floors"]
+        REID["TargetMatcher (OSNet)\n━━━━━━━━━━━━━━━\nosnet_x0_25, frozen backbone\nmulti-photo gallery, disk-persisted"]
+        OCR["MarkerOCR\n━━━━━━━━━━━━━━━\nTesseract cross-check --\nflags MISMATCH only, never\n'no signal' as an anomaly"]
+        NAV["nav_math.py\n━━━━━━━━━━━━━━━\nmotion-derived heading,\nwaypoint offset -- unit-tested"]
+        GUARD["CollisionGuard\n━━━━━━━━━━━━━━━\nbbox-area proximity proxy"]
+        IA --> DET
+        IA --> REID
+        IA --> OCR
+        IA --> NAV
         RF --> DET
         RF --> REID
-        SA --> GUARD
+    end
+
+    subgraph REGISTRATION["📋 OFFLINE, ONE-TIME"]
+        REG["register_mission_objects.py\n━━━━━━━━━━━━━━━\nreads mission_objects/*.jpg\nbuilds OSNet embeddings\nsaves target_gallery.pkl"]
+        GAL["target_gallery.pkl\n(not committed, regenerated\nper-machine)"]
+        APRIL["AprilTag pipeline\n━━━━━━━━━━━━━━━\ncalibrate_camera.py\nmeasure_waypoints.py --\ndrive-and-center, all 8 tags\nare waypoints, no reference tags"]
+        REG --> GAL
+        GAL -.->|loaded at startup| REID
     end
 
     subgraph HUB["⚙️ HUB LAYER"]
-        MAIN["FastAPI Hub (main.py)\n━━━━━━━━━━━━━━━\n• /ws — WebSocket contract\n• /api/targets — register\n• /api/state — snapshot\n• teams, scoring, rate limiting"]
-        FLYWHEEL["training_data/\n━━━━━━━━━━━━━━━\nconfirmed/&lt;target&gt;/*.jpg\ndisputed/&lt;target&gt;/*.jpg\nstats.json — per-label tally"]
-        FT["finetune_osnet_head.py\n━━━━━━━━━━━━━━━\ndata-gated (min 8/class, 2 classes)\nfrozen-embedding linear head\nhonest before/after eval"]
-        SA -->|WebSocket, outbound only| MAIN
-        SA -.->|crops, same-machine only| FLYWHEEL
+        MAIN["FastAPI Hub (main.py)\n━━━━━━━━━━━━━━━\n• /ws — WebSocket contract\n• inner/outer site roles\n• voting, alerts, confirmed_objects map\n• rate limiting"]
+        FLYWHEEL["training_data/\n━━━━━━━━━━━━━━━\nconfirmed/&lt;target&gt;/*.jpg\ndisputed/&lt;target&gt;/*.jpg"]
+        FT["finetune_osnet_head.py\n━━━━━━━━━━━━━━━\ndata-gated, honest before/after eval"]
+        IA -->|WebSocket| MAIN
+        SA -->|WebSocket| MAIN
+        IA -.->|crops| FLYWHEEL
+        SA -.->|crops| FLYWHEEL
         FLYWHEEL -.->|offline, on-demand| FT
     end
 
     subgraph FRONTEND["🖥️ FRONTEND LAYER"]
-        HUD["Mission Control\n━━━━━━━━━━━━━━━\nindex.html\nThree.js arena + minimap\nlive sightings, chat, votes"]
-        DASH["Analytics Dashboard\n━━━━━━━━━━━━━━━\ndashboard.html\nChart.js — teams, hunters,\ncatch distribution"]
+        HUD["Mission Control\n━━━━━━━━━━━━━━━\nindex.html\ndual real-feed + twin view (in progress)\nproof gallery, alert log, vote"]
         MAIN -->|WebSocket broadcast| HUD
-        MAIN -->|/api/state, polled| DASH
     end
 
-    NOTE["No path in this diagram lets a Spectator\nor another Field Agent reach CTRL — that\nboundary is structural, not a UI convention."]
+    NOTE["No path in this diagram lets a Spectator\nor another Field Agent reach a drive script --\nthat boundary is structural, not a UI convention."]
 ```
 
 ---
 
-## Data Flow — Detection to Confirmed Sighting
+## Data Flow — Capture to Confirmed Object
 
 ```mermaid
 sequenceDiagram
     participant Twin as Cyberwave Twin
-    participant RF as real_feed.py
+    participant IA as inner_agent.py
     participant Det as YoloeDetector
-    participant Smooth as Temporal Smoothing
-    participant Match as TargetMatcher
-    participant SA as site_agent.py
+    participant Smooth as Temporal Smoothing + Framing Gate
+    participant Match as TargetMatcher (OSNet)
+    participant OCR as MarkerOCR
     participant Hub
-    participant Voters
+    participant Spectators
 
-    RF->>Twin: get_frame('numpy', source='remote_edge')
-    Twin-->>RF: frame (shape confirmed at runtime, not assumed)
-    RF->>Det: detect(frame)
-    Det-->>RF: [Detection(label, confidence, bbox), ...]
-    RF->>Smooth: _update_smoothing(detections)
-    Note over Smooth: label must hit >=3 of last 5 ticks<br/>before being trusted at all
-    Smooth-->>RF: stable_label or None
-    RF->>RF: cooldown + already-pending dedup check
-    RF->>Match: best_match(crop) if targets registered
-    Match-->>RF: (target_name, score) or (None, score)
-    RF-->>SA: Candidate (crop held locally)
-    SA->>Hub: candidate_report (metadata only, no image)
-    Hub-->>SA: candidate broadcast (Hub-assigned id)
-    Voters->>Hub: vote (confirm / dispute)
-    Hub->>Hub: tally vs CONFIRM_THRESHOLD
-    Hub-->>SA: match_confirmed or match_rejected
-    SA->>SA: correlate id -> locally-held crop by (label, waypoint)
-    SA->>SA: save to training_data/confirmed/ or /disputed/
+    IA->>Twin: get_frame('numpy', source='remote_edge')
+    Twin-->>IA: frame
+    IA->>Det: detect(frame)
+    Det-->>IA: [Detection(label, confidence, bbox), ...]
+    IA->>Smooth: _update_smoothing(detections)
+    Note over Smooth: label must hit >=3 of last 5 ticks,<br/>AND bbox area >= MIN_FRAME_FRACTION<br/>(a properly-framed capture, not a distant one)
+    Smooth-->>IA: stable_label or None
+    IA->>Match: best_match(crop) against registered gallery
+    Match-->>IA: (target_name, score) or (None, score)
+    IA->>OCR: read_number(crop), cross_check(result, expected)
+    Note over OCR: "no signal" is never an anomaly --<br/>only a genuine number MISMATCH is flagged
+    OCR-->>IA: ocr_number, ocr_anomaly (None unless real mismatch)
+    IA->>IA: encode proof image (base64 JPEG, downscaled)
+    IA->>IA: look up twin_semantic_label from objects_config.json
+    IA-->>Hub: candidate_report (label, OCR result, image, twin label, location_offset)
+    Hub-->>Spectators: candidate broadcast
+    Spectators->>Hub: vote (confirm / dispute)
+    Hub->>Hub: tally vs CONFIRM_THRESHOLD / DISPUTE_THRESHOLD
+    Hub-->>Spectators: match_confirmed or match_rejected
+    Hub->>Hub: confirmed_objects[label] = entry (the "where is object N" answer)
 ```
 
 ---
 
-## Data Flow — AprilTag Calibration Pipeline
+## Data Flow — Intruder Alert
 
 ```mermaid
 sequenceDiagram
-    participant Op as Operator
-    participant Cal as calibrate_camera.py
-    participant Twin as Cyberwave Twin
-    participant JSON as camera_intrinsics.json
-    participant AT as apriltag_detector.py
-    participant MW as measure_waypoints.py
+    participant UGV as Any UGV (inner or outer)
+    participant RF as real_feed.py
+    participant Hub
+    participant Everyone as Everyone connected
 
-    Op->>Cal: --source webcam (sanity check, any room)
-    Op->>Cal: --source twin (real calibration, robot powered on)
-    Cal->>Twin: get_frame() per checkerboard capture
-    Cal->>Cal: cv2.calibrateCamera() — 15-20 captures
-    Cal->>JSON: write fx, fy, cx, cy, dist_coeffs
-    Note over AT: refuses to run without this file —<br/>a guessed fx/fy is worse than refusing
-    Op->>MW: run at venue, tags 6+7 placed first (fixed reference)
-    MW->>AT: detect(frame) per waypoint tag
-    AT-->>MW: translation, distance (camera-relative frame)
-    MW->>Op: waypoint_measurements.json
-    Note over Op: manual conversion into get_pose()'s frame —<br/>deliberately not automated, checked vs tape measure
+    UGV->>RF: check_intruder(detections) -- same tick's detections,<br/>no extra detect() call
+    Note over RF: fires independently of the object-candidate<br/>pipeline -- no waypoint gating, 15s cooldown only.<br/>Speed matters more than dedup here.
+    RF-->>UGV: alert dict (position, nearest_waypoint, distance_m) or None
+    UGV-->>Hub: alert_report
+    Hub->>Hub: look up inner_site(), fold its last position into the message
+    Hub-->>Everyone: alert broadcast (site_owner, site_role, position,<br/>distance, message incl. inner UGV's last position)
 ```
 
 ---
 
 ## Component Reference
 
-### Field Agent Layer
+### Inner UGV
 
 | Component | File | Purpose |
-|---|---|---|
-| **Detection** | `backend/vision/detector.py` | YOLOE-26 wrapper, ~40-word open vocabulary, per-label confidence floors |
-| **Re-identification** | `backend/vision/reid.py` | OSNet `osnet_x0_25`, multi-photo gallery, best-of-gallery cosine matching |
+| --- | --- | --- |
+| **Sequential mission driver** | `backend/inner_agent.py` | Motion-derived-heading navigation, framing-gated capture, Hub relay -- merged into one process because the mission's drive→stop→capture→verify sequencing has to live in one control loop |
+| **Nav geometry** | `backend/nav_math.py` | Pure vector math (heading angle, waypoint offset) -- zero heavy dependencies, unit-tested independently of the CV/hardware stack |
+| **Objects registry** | `backend/objects_registry.py` | Loads `objects_config.json`, sorts by sequence number, resolves target-name → expected-number / twin-label / description lookups |
+| **Offline registration** | `backend/register_mission_objects.py` | One-time OSNet gallery build from `mission_objects/*.jpg`, run before a mission starts |
+
+### Shared CV/Telemetry Core
+
+| Component | File | Purpose |
+| --- | --- | --- |
+| **Detection** | `backend/vision/detector.py` | YOLOE-26 wrapper, open vocabulary, per-label confidence floors |
+| **Re-identification** | `backend/vision/reid.py` | OSNet matcher, multi-photo gallery, **disk-persisted** (`save_gallery`/`load_gallery` -- fixes an earlier in-memory-only gap where offline registration never reached the mission-running process) |
+| **OCR cross-check** | `backend/vision/ocr_check.py` | Marker-number read, flags a mismatch only -- "no signal" is never an anomaly |
 | **Collision safety** | `backend/vision/collision_guard.py` | Independent proximity emergency-stop, bbox-area proxy |
-| **AprilTag calibration** | `backend/vision/calibrate_camera.py` | Checkerboard intrinsics calibration — webcam sanity check + real twin calibration |
-| **AprilTag detection** | `backend/vision/apriltag_detector.py` | tag36h11 pose estimation, refuses to run without real intrinsics |
-| **Venue measurement** | `backend/vision/measure_waypoints.py` | Records real waypoint positions relative to fixed reference tags |
-| **Live vision core** | `backend/real_feed.py` | Telemetry refresh, frame capture, temporal smoothing, candidate lifecycle |
-| **Hub relay** | `backend/site_agent.py` | WebSocket relay, local video overlay, data-flywheel crop capture |
-| **Manual drive** | `backend/teleop.py` | Gamepad control, direct SDK calls |
-| **Autonomous patrol** | `backend/patrol.py` | Sweep pattern + coverage tracking (not point-to-point — yaw unresolved) |
-| **Voice control** | `backend/voice_control.py` | Groq Whisper push-to-talk |
-| **VO experiment** | `backend/vo_feasibility_test.py` | Monocular ORB feature-tracking go/no-go signal |
+| **Annotated-feed drawing** | `backend/vision/overlay.py` | Shared cube-overlay/label-coloring, used by both `inner_agent.py` and `site_agent.py` so the two don't drift into separate copies |
+| **AprilTag detection** | `backend/vision/apriltag_detector.py` | tag36h11, all 8 tags are waypoints (no reserved reference tags) |
+| **Waypoint measurement** | `backend/vision/measure_waypoints.py` | Drive-and-center: records `get_pose()`'s (x, y) directly at each tag, sidesteps the yaw-conversion problem entirely |
+| **Live vision core** | `backend/real_feed.py` | Telemetry refresh, frame capture, temporal smoothing + framing gate, candidate lifecycle, intruder check -- shared by both inner and outer processes |
+
+### Outer UGVs
+
+| Component | File | Purpose |
+| --- | --- | --- |
+| **Relay + overwatch** | `backend/site_agent.py` | Hub relay, local annotated feed, intruder-alert reporting -- driven separately by `teleop.py`/`voice_control.py`, since outer UGVs don't need the tight sequencing inner does |
 
 ### Hub Layer
 
 | Component | File | Purpose |
-|---|---|---|
-| **Multi-site Hub** | `backend/main.py` | WebSocket contract, teams, scoring, voting, chat, rate limiting |
+| --- | --- | --- |
+| **Multi-site Hub** | `backend/main.py` | WebSocket contract, inner/outer site roles, voting, alert relay, `confirmed_objects` map, chat, rate limiting |
 | **Data flywheel** | `training_data/` (generated, not committed) | Confirmed/disputed crops + per-label stats |
 | **Fine-tuning** | `backend/finetune_osnet_head.py` | Data-gated linear head fine-tune on frozen OSNet embeddings |
-| **Hub tests** | `backend/test_multisite.py` | 16 tests, real simulated WebSocket clients |
 
 ### Frontend Layer
 
 | Component | File | Purpose |
-|---|---|---|
-| **Mission Control** | `frontend/index.html` | Three.js arena map + minimap, live sightings, chat, voting |
-| **Analytics** | `frontend/dashboard.html` | Chart.js — team comparison, top hunters, catch distribution |
+| --- | --- | --- |
+| **Mission Control** | `frontend/index.html` | Real feed + twin view (in progress), proof gallery, alert log, object-location lookup, voting |
 
 ---
 
 ## Key Stats
 
 | Metric | Value |
-|---|---|
-| Hub tests passing | 16 / 16 |
+| --- | --- |
+| Mission objects | 8 (4 cylinders, 2 cones, 2 boxes; blue/pink marker paper) |
+| Waypoints | 8, tags 0-7, all waypoints, no dedicated reference tags |
 | Detection vocabulary | ~40 labels (open-vocabulary, YOLOE-26) |
 | Person confidence floor | 0.65 (vs. 0.45 default) |
 | Temporal smoothing window | 3 of last 5 ticks |
-| Detection cooldown | 25s (raised from 4s after duplicate-spam bug) |
+| Minimum frame fraction (capture gate) | 0.05 -- object must be reasonably sized in-frame before a candidate raises |
+| Detection cooldown | 25s |
+| Intruder-alert cooldown | 15s, no waypoint gating (speed over dedup) |
 | CollisionGuard threshold | 30% of frame, 0.15s check interval |
-| AprilTags printed | 8 (tag36h11, 100mm) — 6 waypoints + 2 fixed reference |
 | Re-id fine-tune data gate | ≥8 confirmed samples/class, ≥2 classes |
-| Multi-site robots confirmed simultaneously | 2 |
-| Frontend pages | 2 (Mission Control · Analytics) |
-| Camera frame shape (confirmed at runtime) | differs from driver's nominal stream resolution — always verify live, don't assume |
+| Nav geometry test coverage | 13 tests (`test_nav_math.py`) |
+| Object registry / OCR decision-logic test coverage | 9 tests (`test_sequential_survey_components.py`) |
 
 ---
 
-## Coordinate Frames — Three Separate Ones
+## Coordinate Frames
 
-A real, worth-being-explicit-about source of past confusion:
+Two frames matter now, one fewer than the earlier design (the AprilTag
+camera-relative frame is no longer a measurement input, only an
+on-screen confirmation aid -- see `measure_waypoints.py`'s docstring
+for why the fusion-transform approach was rejected: it needs yaw, which
+this project deliberately never derives from `get_pose()`'s quaternion):
 
-1. **`get_pose()`'s frame** — what `WAYPOINTS` in `real_feed.py` is defined in. Rotation is a
-   quaternion, not yaw — deliberately unconverted rather than guessed.
-2. **AprilTag camera-relative frame** — what `apriltag_detector.py` returns per detection,
-   relative to the camera's own optical axis. `measure_waypoints.py` records raw values here,
-   anchored to two fixed reference tags (IDs 6, 7).
-3. **Arena map frame** — `_arena_position()` in `main.py`, a deterministic hash-derived position
-   with **no relationship to real geography**. Exists only so every site has a stable, distinct
-   spot on the shared Spectator map.
-
-Converting frame 2 into frame 1 is manual, checked-against-a-tape-measure work —
-`measure_waypoints.py` deliberately does not attempt this automatically.
+1. **`get_pose()`'s frame** -- what `WAYPOINTS` in `real_feed.py` is
+   defined in. This is now the ONLY frame that matters for waypoint
+   measurement: `measure_waypoints.py` drives the robot to physically
+   center on each tag, then records `get_pose()`'s (x, y) directly --
+   no conversion step, because there's nothing left to convert between.
+2. **Arena map frame** -- whatever the frontend's own visualization
+   uses for its abstract multi-site layout, if any (has no relationship
+   to real geography; exists only so each site has a stable, distinct
+   position on a shared visual).
 
 ---
 
@@ -210,59 +241,49 @@ flowchart LR
     L1 -.independent, no shared state.-> L2
 ```
 
-`CollisionGuard` is explicitly **not** depth-based obstacle avoidance — no lidar or depth camera
-on this hardware, so bbox fill-fraction is a coarse proxy, described in code as an emergency
-brake, not a planner. Runs independently in `real_feed.py`'s `telemetry_loop`, `site_agent.py`
-(previously dead code — only ever instantiated inside `telemetry_loop`, which the multi-site
-path never calls, fixed by starting it explicitly), and `patrol.py` (autonomous driving must
-never run without it active).
+`CollisionGuard` is explicitly **not** depth-based obstacle avoidance --
+no lidar or depth camera on this hardware. Runs independently in both
+`inner_agent.py` and `site_agent.py` -- each process starts and gates
+its own movement calls behind it, so autonomous driving in either role
+never runs without the emergency-stop active.
 
 ---
 
 ## Environment Variables
 
 | Variable | Default | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `CYBERWAVE_API_KEY` | — | Required. Cyberwave SDK authentication |
 | `CYBERWAVE_ENVIRONMENT_ID` | `9383b6b2-0df7-4e99-8d9e-8a352eb6e1ab` | Twin environment |
 | `GROQ_API_KEY` | — | Only needed for `voice_control.py` |
 
 ---
 
-## Technology Stack
-
-| Layer | Technology | Role |
-|---|---|---|
-| Robot | Waveshare UGV Beast (Pi 4B + ESP32) | Vision-only ground robot, no lidar |
-| Platform | Cyberwave SDK + edge-core | Pairing, MQTT telemetry, camera frame retrieval |
-| Detection | YOLOE-26 (`ultralytics`) | Real-time open-vocabulary object detection |
-| Re-identification | OSNet (`torchreid`, `osnet_x0_25`) | Appearance-based re-matching + fine-tune target |
-| Localization | AprilTag `tag36h11` (`pupil-apriltags`) | Waypoint pose reference |
-| Calibration | OpenCV checkerboard calibration | Real camera intrinsics, not spec-sheet FOV |
-| Safety | `CollisionGuard` | Independent proximity emergency-stop |
-| Backend | FastAPI + WebSocket | Multi-site Hub |
-| Frontend | Three.js + Chart.js + vanilla JS | Mission Control HUD + analytics |
-| Voice | Groq Whisper API | Push-to-talk driving |
-| ML ops | `scikit-learn` | Frozen-embedding linear head for re-id fine-tuning |
-| Testing | `pytest` + FastAPI `TestClient` | 16 tests, simulated multi-client WebSocket flows |
-
----
-
 ## What's Deliberately Not Solved
 
-Documented here rather than left implicit — an architecture doc that only shows what works is a
-marketing document, not an architecture doc:
+Documented here rather than left implicit:
 
-- **Yaw from quaternion.** Never guessed. `patrol.py` works around this with coverage-tracking
-  instead of directed steering.
-- **AprilTag → `get_pose()` frame conversion.** Manual, checked against physical measurement.
-- **Remote video tunneling.** `site_agent.py`'s annotated feed is same-machine-only by design;
-  a real fix needs ngrok or equivalent, not yet built.
-- **Battery/FPS telemetry.** `twin.telemetry` is publish-only; the correct read-side method is
-  still unconfirmed.
-- **Monocular VO.** Has an inherent scale ambiguity regardless of feature-tracking quality —
-  evaluated as a possible supplement to AprilTag gating, never a primary nav system.
+- **Yaw from quaternion.** Never guessed, anywhere -- not in navigation,
+  not in waypoint measurement. `inner_agent.py`'s nav controller and
+  `measure_waypoints.py`'s drive-and-center method both work entirely
+  from measured position, never rotation.
+- **Remote video tunneling.** Same-machine-only by design; a real fix
+  needs ngrok or equivalent, not yet built.
+- **Battery/FPS telemetry.** `twin.telemetry` is publish-only; the
+  correct read-side method is still unconfirmed.
+- **Monocular VO.** Inherent scale ambiguity regardless of feature-
+  tracking quality -- evaluated as a possible supplement, never a
+  primary nav system.
+- **Intruder participant-matching.** Any unregistered "person" fires an
+  alert; there's no attempt to distinguish a real intruder from a known
+  team member who simply isn't a registered mission object (registered
+  targets are physical props, not people, so there's nothing to match
+  a person's appearance against even if this were built).
+- **Twin object placement reconciliation.** `objects_config.json`'s
+  `twin_semantic_label` fields are still `null` for all 8 objects --
+  the identity-vs-twin comparison spectators are meant to vote on
+  degrades to "unknown" until this is done.
 
 ---
 
-*Part of [QUARRY](./README.md) — Cyberwave Builders Program, Cohort 2. FIELDWORK · ORION · THE OUTRIDER.*
+*Part of [QUARRY](./README.md) — Cyberwave Builders Program, Cohort 2.*
