@@ -43,6 +43,7 @@ from backend.vision.detector import YoloeDetector
 from backend.vision.reid import TargetMatcher
 from backend.vision.collision_guard import CollisionGuard
 from backend.vision.ocr_check import MarkerOCR
+from backend.vision.shape_color import detect_shape_and_color
 from backend.objects_registry import load_objects, expected_number_for
 from backend.nav_math import location_offset as _nav_location_offset
 
@@ -143,26 +144,33 @@ def _location_offset_for(waypoint_id: Optional[str], position: dict) -> Optional
 
 class Candidate(_BaseCandidate):
     """Extends mock_feed.Candidate with instant_confidence, location_offset,
-    and OCR cross-check fields -- purely additive to the WebSocket contract.
-    `confidence` (inherited) is now the EMA-smoothed rolling value used for
-    gating/scoring; `instant_confidence` is the raw single-frame reading,
-    kept only for display. `location_offset` is the waypoint+offset location
-    (Section 5 Task 6). `ocr_number`/`ocr_anomaly` are the OCR cross-check
-    result (Section 4's "OSNet primary, OCR cross-check" rule) -- ocr_anomaly
-    is None unless OCR actually disagreed with the OSNet match. Note:
-    `image`/`twin_semantic_label` (the mission-narrative additions for the
-    proof gallery and identity-vs-twin comparison) are deliberately NOT
-    fields on this class -- they're attached by the relay layer
-    (inner_agent.py / site_agent.py) at send time, since this class's job
-    is CV/telemetry state, not WebSocket payload shaping."""
+    OCR cross-check fields, and (Task 2) shape/color detection -- purely
+    additive to the WebSocket contract. `confidence` (inherited) is now the
+    EMA-smoothed rolling value used for gating/scoring; `instant_confidence`
+    is the raw single-frame reading, kept only for display. `location_offset`
+    is the waypoint+offset location (Section 5 Task 6). `ocr_number`/
+    `ocr_anomaly` are the OCR cross-check result (Section 4's "OSNet primary,
+    OCR cross-check" rule) -- ocr_anomaly is None unless OCR actually
+    disagreed with the OSNet match. `detected_shape`/`detected_color` are the
+    coarse heuristic identity signal from vision/shape_color.py -- same
+    "None means no confident signal, not a claim of absence" philosophy as
+    the OCR fields. Note: `image`/`twin_semantic_label` (the mission-
+    narrative additions for the proof gallery and identity-vs-twin
+    comparison) are deliberately NOT fields on this class -- they're
+    attached by the relay layer (inner_agent.py / site_agent.py) at send
+    time, since this class's job is CV/telemetry state, not WebSocket
+    payload shaping."""
 
     def __init__(self, label, confidence, waypoint, is_registered_target, instant_confidence=None,
-                 location_offset=None, ocr_number=None, ocr_anomaly=None):
+                 location_offset=None, ocr_number=None, ocr_anomaly=None,
+                 detected_shape=None, detected_color=None):
         super().__init__(label, confidence, waypoint, is_registered_target)
         self.instant_confidence = confidence if instant_confidence is None else instant_confidence
         self.location_offset = location_offset
         self.ocr_number = ocr_number
         self.ocr_anomaly = ocr_anomaly
+        self.detected_shape = detected_shape
+        self.detected_color = detected_color
 
     def to_dict(self):
         d = super().to_dict()
@@ -170,6 +178,8 @@ class Candidate(_BaseCandidate):
         d["location_offset"] = self.location_offset
         d["ocr_number"] = self.ocr_number
         d["ocr_anomaly"] = self.ocr_anomaly
+        d["detected_shape"] = self.detected_shape
+        d["detected_color"] = self.detected_color
         return d
 
 
@@ -463,12 +473,21 @@ class RealRobotState:
                 ocr_number = ocr_result.number
                 ocr_anomaly = self.ocr.cross_check(ocr_result, expected_number)
 
+        # Shape + color (Task 2) -- coarse heuristic secondary identity
+        # signal, computed unconditionally (like location_offset) since it's
+        # cheap and every candidate benefits, not just registered/matched
+        # ones. detect_shape_and_color() never raises -- worst case both
+        # come back None, same "no signal" philosophy as OCR above.
+        detected_shape, detected_color = detect_shape_and_color(crop)
+
         candidate = Candidate(
             label, rolling_conf, wp_id, is_registered,
             instant_confidence=round(best.confidence, 2),
             location_offset=location_offset,
             ocr_number=ocr_number,
             ocr_anomaly=ocr_anomaly,
+            detected_shape=detected_shape,
+            detected_color=detected_color,
         )
         # training_crop is a same-process, local handoff to the relay layer
         # (site_agent.py / inner_agent.py) -- NOT part of Candidate.to_dict().

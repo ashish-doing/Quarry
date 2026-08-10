@@ -129,7 +129,8 @@ def _arena_position(site_id: str):
 class Candidate:
     def __init__(self, label, confidence, waypoint, is_registered_target, site_id,
                  instant_confidence=None, location_offset=None, ocr_number=None,
-                 ocr_anomaly=None, image=None, twin_semantic_label=None):
+                 ocr_anomaly=None, image=None, twin_semantic_label=None,
+                 detected_shape=None, detected_color=None):
         self.id = str(uuid.uuid4())[:8]
         self.site_id = site_id
         self.label = label
@@ -145,6 +146,8 @@ class Candidate:
         self.ocr_anomaly = ocr_anomaly
         self.image = image                          # base64 JPEG or None
         self.twin_semantic_label = twin_semantic_label  # what the twin claims is here
+        self.detected_shape = detected_shape          # Task 2: coarse shape heuristic, or None
+        self.detected_color = detected_color           # Task 2: blue/pink heuristic, or None
 
     def net_confirms(self):
         c = sum(1 for v in self.votes.values() if v == "confirm")
@@ -167,6 +170,8 @@ class Candidate:
             "ocr_anomaly": self.ocr_anomaly,
             "image": self.image,
             "twin_semantic_label": self.twin_semantic_label,
+            "detected_shape": self.detected_shape,
+            "detected_color": self.detected_color,
         }
 
 
@@ -364,6 +369,8 @@ async def ws_endpoint(websocket: WebSocket):
                     ocr_anomaly=msg.get("ocr_anomaly"),
                     image=msg.get("image"),
                     twin_semantic_label=msg.get("twin_semantic_label"),
+                    detected_shape=msg.get("detected_shape"),
+                    detected_color=msg.get("detected_color"),
                 )
                 hub.sites[player.site_id].candidates[candidate.id] = candidate
                 await broadcast(candidate.to_dict())
@@ -475,6 +482,8 @@ async def ws_endpoint(websocket: WebSocket):
                         "ocr_anomaly": candidate.ocr_anomaly,
                         "image": candidate.image,
                         "twin_semantic_label": candidate.twin_semantic_label,
+                        "detected_shape": candidate.detected_shape,
+                        "detected_color": candidate.detected_color,
                     }
                     # The actual "where is object N" answer, keyed by label --
                     # overwritten on re-confirmation if a target is somehow

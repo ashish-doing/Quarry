@@ -54,6 +54,7 @@ from dotenv import load_dotenv
 from backend import real_feed
 from backend.vision.collision_guard import CollisionGuard
 from backend.vision.overlay import draw_detections
+from backend.vision.shape_color import detect_shape_and_color
 from backend.objects_registry import load_objects, expected_number_for, twin_label_for
 from backend.nav_math import vector_to, normalize, signed_angle_between, waypoint_xy, location_offset
 
@@ -280,6 +281,19 @@ async def run(hub_url: str, name: str, location: str):
                                 print(f"  OCR cross-check OK: read '{candidate.ocr_number}', "
                                       f"matches expected object-{expected}")
 
+                        # Shape + color: secondary identity signal, additive
+                        # only. Prefer fields already on the Candidate if
+                        # real_feed.py's maybe_raise_candidate() has been
+                        # updated to compute them (see shape_color.py) --
+                        # fall back to computing here from the same crop so
+                        # this still works even if that wiring lands later.
+                        detected_shape = getattr(candidate, "detected_shape", None)
+                        detected_color = getattr(candidate, "detected_color", None)
+                        if detected_shape is None and detected_color is None and crop is not None:
+                            detected_shape, detected_color = detect_shape_and_color(crop)
+                        if detected_shape or detected_color:
+                            print(f"  shape/color: {detected_shape or '?'}/{detected_color or '?'}")
+
                         await ws.send(json.dumps({
                             "type": "candidate_report",
                             "label": candidate.label,
@@ -290,6 +304,8 @@ async def run(hub_url: str, name: str, location: str):
                             "location_offset": candidate.location_offset,
                             "ocr_number": candidate.ocr_number,
                             "ocr_anomaly": candidate.ocr_anomaly,
+                            "detected_shape": detected_shape,
+                            "detected_color": detected_color,
                             "image": _encode_proof_image(crop),
                             "twin_semantic_label": twin_label_for(candidate.label, objects),
                         }))
