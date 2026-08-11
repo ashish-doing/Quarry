@@ -1,13 +1,13 @@
 {
-  "_comment": "QUARRY sequential-survey object registry -- 8 objects, 1:1 with 8 waypoints (tags 0-7, no separate reference tags -- room frame anchored to the robot's start position per the venue-setup decision). number = sequential visit order. target_name must match what's passed to register_target() in register_mission_objects.py. expected_waypoint must be one of real_feed.WAYPOINTS[*]['id']. twin_semantic_label is owned by the twin-sync chat -- still null, reconcile once that chat's real output format is known (master doc Section 6). description is purely informational (shape/color), for humans, not consumed by matching logic.",
+  "_comment": "QUARRY sequential-survey object registry -- 8 objects, 1:1 with 8 waypoints (tags 0-7, no separate reference tags -- room frame anchored to the robot's start position per the venue-setup decision). number = sequential visit order. target_name must match what's passed to register_target() in register_mission_objects.py. expected_waypoint must be one of real_feed.WAYPOINTS[*]['id']. twin_semantic_label is the DECOY the Cyberwave twin displays at that waypoint -- deliberately mismatched from the real object's true shape/color, per the project's core mechanic: voters cross-check the real feed against the twin view and dispute the twin's false claim. description is the real object's actual shape/color, for humans, not consumed by matching logic.",
   "objects": [
-    {"number": "01", "target_name": "object-01", "expected_waypoint": "W1", "twin_semantic_label": null, "description": "blue cylinder"},
-    {"number": "02", "target_name": "object-02", "expected_waypoint": "W2", "twin_semantic_label": null, "description": "blue cylinder"},
-    {"number": "03", "target_name": "object-03", "expected_waypoint": "W3", "twin_semantic_label": null, "description": "pink cylinder"},
-    {"number": "04", "target_name": "object-04", "expected_waypoint": "W4", "twin_semantic_label": null, "description": "pink cylinder"},
-    {"number": "05", "target_name": "object-05", "expected_waypoint": "W5", "twin_semantic_label": null, "description": "blue cone"},
-    {"number": "06", "target_name": "object-06", "expected_waypoint": "W6", "twin_semantic_label": null, "description": "pink cone"},
-    {"number": "07", "target_name": "object-07", "expected_waypoint": "W7", "twin_semantic_label": null, "description": "blue box"},
-    {"number": "08", "target_name": "object-08", "expected_waypoint": "W8", "twin_semantic_label": null, "description": "pink box"}
+    {"number": "01", "target_name": "object-01", "expected_waypoint": "W1", "twin_semantic_label": "Storage Cabinet", "description": "blue cylinder"},
+    {"number": "02", "target_name": "object-02", "expected_waypoint": "W2", "twin_semantic_label": "Task Lamp", "description": "pink cylinder"},
+    {"number": "03", "target_name": "object-03", "expected_waypoint": "W3", "twin_semantic_label": "Ladder", "description": "blue cone"},
+    {"number": "04", "target_name": "object-04", "expected_waypoint": "W4", "twin_semantic_label": "Utility Cart", "description": "blue cylinder"},
+    {"number": "05", "target_name": "object-05", "expected_waypoint": "W5", "twin_semantic_label": "Equipment Rack", "description": "pink box"},
+    {"number": "06", "target_name": "object-06", "expected_waypoint": "W6", "twin_semantic_label": "Work Table", "description": "pink cylinder"},
+    {"number": "07", "target_name": "object-07", "expected_waypoint": "W7", "twin_semantic_label": "Robot Charging Dock", "description": "blue box"},
+    {"number": "08", "target_name": "object-08", "expected_waypoint": "W8", "twin_semantic_label": "Pallet Stack", "description": "pink cone"}
   ]
 }
