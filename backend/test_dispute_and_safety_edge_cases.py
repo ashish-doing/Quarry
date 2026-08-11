@@ -5,6 +5,15 @@ than confirm and easy to leave under-tested) and CollisionGuard's
 debounce/re-arm logic (the actual safety-critical state machine, not
 just the proximity-threshold happy path).
 
+Updated for the co-op recon mission contract: join() now sends
+site_role instead of team, and the leaderboard-based assertion was
+replaced with a confirmed_objects check (main.py no longer has a
+leaderboard at all -- a rejected candidate's real, current guarantee is
+that it never lands in hub.confirmed_objects, which is what "where is
+object N" is actually keyed off of now). The CollisionGuard tests below
+are untouched -- that logic doesn't know or care about the Hub's
+contract at all.
+
 Run:
     python -m pytest backend/test_dispute_and_safety_edge_cases.py -v
 """
@@ -37,21 +46,23 @@ class FakeDetection:
         self.confidence = 0.9
 
 
-def _join(ws, name, role="field_agent", team="Alpha", location="Test Room"):
-    payload = {"type": "join", "name": name, "role": role, "team": team}
+def _join(ws, name, role="field_agent", site_role="outer", location="Test Room"):
+    payload = {"type": "join", "name": name, "role": role}
     if role == "field_agent":
         payload["location"] = location
+        payload["site_role"] = site_role
     ws.send_json(payload)
     return ws.receive_json()  # the "init" message
 
 
 def test_dispute_resolution_reaches_threshold_and_rejects():
-    """A candidate voted down past -CONFIRM_THRESHOLD must resolve to
+    """A candidate voted down past -DISPUTE_THRESHOLD must resolve to
     match_rejected, not sit pending forever. Mirrors the confirm-path
     test but was the actual bug this feature fixed -- confirm alone
     passing doesn't prove dispute does."""
     hub.sites.clear()
     hub.players.clear()
+    hub.confirmed_objects.clear()
 
     client = TestClient(app)
     with client.websocket_connect("/ws") as agent_ws, \
@@ -79,7 +90,7 @@ def test_dispute_resolution_reaches_threshold_and_rejects():
 
         assert candidate_id is not None
 
-        # Two disputes should hit -CONFIRM_THRESHOLD (default 2)
+        # Two disputes should hit -DISPUTE_THRESHOLD (default 2)
         voter1_ws.send_json({"type": "vote", "site_id": site_id, "id": candidate_id, "vote": "dispute"})
         voter2_ws.send_json({"type": "vote", "site_id": site_id, "id": candidate_id, "vote": "dispute"})
 
@@ -101,11 +112,15 @@ def test_dispute_resolution_reaches_threshold_and_rejects():
         assert candidate_id not in hub.sites[site_id].candidates
 
 
-def test_disputed_candidate_not_double_counted_toward_leaderboard():
-    """A rejected candidate must never contribute points -- confirms and
-    disputes are mutually exclusive outcomes for the same candidate."""
+def test_disputed_candidate_never_reaches_confirmed_objects():
+    """A rejected candidate must never land in hub.confirmed_objects --
+    confirmed_objects is the actual "where is object N" answer now (the
+    old version of this test asserted on a leaderboard, which no longer
+    exists at all; this is the equivalent-strength check against what
+    main.py actually does today)."""
     hub.sites.clear()
     hub.players.clear()
+    hub.confirmed_objects.clear()
 
     client = TestClient(app)
     with client.websocket_connect("/ws") as agent_ws, \
@@ -117,8 +132,8 @@ def test_disputed_candidate_not_double_counted_toward_leaderboard():
         _join(voter2_ws, "VoterB", role="spectator")
 
         agent_ws.send_json({
-            "type": "candidate_report", "label": "backpack", "confidence": 0.7,
-            "instant_confidence": 0.7, "waypoint": "W2", "is_registered_target": False,
+            "type": "candidate_report", "label": "object-05", "confidence": 0.7,
+            "instant_confidence": 0.7, "waypoint": "W2", "is_registered_target": True,
         })
 
         candidate_id, site_id = None, None
@@ -137,14 +152,14 @@ def test_disputed_candidate_not_double_counted_toward_leaderboard():
             if msg.get("type") == "match_rejected":
                 break
 
-        assert "VoterA" not in hub.leaderboard
-        assert "VoterB" not in hub.leaderboard
-        assert hub.sites[site_id].score == 0
+        assert "object-05" not in hub.confirmed_objects
 
 
 # ---------------------------------------------------------------------------
 # CollisionGuard debounce / re-arm state machine -- the actual
 # safety-critical logic, not just "does it detect a close object once."
+# Untouched by the Hub contract change -- these don't go through main.py
+# at all, so nothing here needed updating.
 # ---------------------------------------------------------------------------
 
 class _CountingDetector:
@@ -262,7 +277,7 @@ async def test_collision_guard_rearms_after_full_clear_streak():
 @pytest.mark.asyncio
 async def test_collision_guard_bad_frame_read_does_not_crash_loop():
     """A twin.get_frame() failure mid-loop must not kill the guard --
-    FMEA #3's flagged gap is the lack of an operator alert here, not a
+    FMEA's flagged gap is the lack of an operator alert here, not a
     crash, but a crash would be strictly worse and this locks that in."""
     events = []
     twin = MagicMock()
