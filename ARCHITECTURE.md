@@ -37,7 +37,7 @@ flowchart TD
         OSDK["Cyberwave Python SDK"]
         RF["real_feed.py\n━━━━━━━━━━━━━━━\nshared CV/telemetry core --\nused by BOTH inner_agent.py\nand site_agent.py"]
         SA["site_agent.py\n━━━━━━━━━━━━━━━\n• Hub WebSocket relay\n• local annotated feed\n• intruder watch\n• CollisionGuard host"]
-        CTRL["Drive scripts\n━━━━━━━━━━━━━━━\n• teleop.py (gamepad)\n• voice_control.py (Whisper)"]
+        CTRL["Drive scripts\n━━━━━━━━━━━━━━━\n• teleop.py (gamepad)\n• patrol.py (autonomous sweep)\n• voice_control.py (Whisper)"]
         OUGV -->|MQTT via edge-core| OSDK
         OSDK --> RF
         RF --> SA
@@ -172,6 +172,7 @@ sequenceDiagram
 | Component | File | Purpose |
 | --- | --- | --- |
 | **Relay + overwatch** | `backend/site_agent.py` | Hub relay, local annotated feed, intruder-alert reporting -- driven separately by `teleop.py`/`voice_control.py`, since outer UGVs don't need the tight sequencing inner does |
+| **Alternate autonomous drive** | `backend/patrol.py` | Position-only sweep-pattern driving (no yaw guessing) -- alternative to manual `teleop.py` for outer UGVs |
 
 ### Hub Layer
 

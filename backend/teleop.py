@@ -114,7 +114,7 @@ def _save_photo(twin):
     on the driver/platform side (checked the dashboard's Captures tab --
     empty, that tab is tied to Workflow missions, not raw teleop calls)."""
     try:
-        frame = twin.get_latest_frame()
+        frame = twin.get_frame('numpy', source='remote_edge')
     except Exception as exc:  # noqa: BLE001
         print(f"[photo] capture failed: {exc}")
         return

@@ -128,6 +128,7 @@ quarry/
 │   ├── real_feed.py                  Shared CV/telemetry core -- used by both inner_agent.py and site_agent.py
 │   ├── inner_agent.py                Inner UGV: sequential nav + capture + relay, merged into one process
 │   ├── site_agent.py                 Outer UGV: relay + intruder watch (driven separately by teleop.py)
+│   ├── patrol.py                     Outer UGV: alternate autonomous sweep-drive script (position-only, no yaw)
 │   ├── nav_math.py                   Pure geometry for the nav controller — unit-tested, zero heavy deps
 │   ├── objects_registry.py           Loads/reconciles objects_config.json
 │   ├── objects_config.json           The 8 mission objects (number, target_name, waypoint, twin label, description)
@@ -216,6 +217,7 @@ python -m backend.inner_agent --hub ws://127.0.0.1:8001/ws --name "Inner" --loca
 ```
 python -m backend.site_agent --hub ws://127.0.0.1:8001/ws --name "Outer-1" --location "City, Country" --role outer
 python backend\teleop.py    # drive it, in a separate window
+# or: python backend\patrol.py    # autonomous sweep-drive alternative to manual teleop
 ```
 
 **Never run more than one drive process (`teleop.py` / `voice_control.py` / `inner_agent.py`'s own loop) against the same robot at the same time.**

@@ -44,6 +44,8 @@ mobileclip_blt.ts
 
 # add:
 training_data/
+target_gallery.pkl
+mission_objects/
 
 backend/vision/camera_intrinsics.json
-backend/vision/waypoint_measurements.json
+backend/waypoint_measurements.json

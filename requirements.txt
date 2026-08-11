@@ -9,3 +9,13 @@ numpy
 pupil-apriltags
 pytest-asyncio
 httpx
+pytesseract
+ultralytics
+torchreid
+scikit-learn
+groq
+keyboard
+pygame
+sounddevice
+soundfile
+websockets

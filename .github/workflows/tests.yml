@@ -34,3 +34,11 @@ jobs:
           CYBERWAVE_API_KEY: "ci-placeholder-not-used"
         run: |
           python -m pytest backend/test_dispute_and_safety_edge_cases.py -v
+
+      - name: Run nav math tests (pytest)
+        run: |
+          python -m pytest backend/test_nav_math.py -v
+
+      - name: Run sequential survey component tests (pytest)
+        run: |
+          python -m pytest backend/test_sequential_survey_components.py -v  
