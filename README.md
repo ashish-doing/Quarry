@@ -1,6 +1,12 @@
-# QUARRY
+<div align="center">
 
-**Cyberwave Builders Program — Cohort 2**
+<img src="docs/branding/quarry-logo.png" alt="QUARRY" width="140" />
+
+<img src="https://readme-typing-svg.demolab.com?font=Syne&weight=800&size=24&duration=3000&pause=1000&color=4ADE80&center=true&vCenter=true&width=1100&lines=QUARRY+%E2%80%94+Autonomous+Sequential+Recon+Survey;8+numbered+objects%2C+strict+order%2C+no+lidar%2C+no+depth+sensor;OSNet+Re-ID+%C2%B7+OCR+Cross-Check+%C2%B7+Cyberwave+Digital+Twin;Confirmed+by+a+human+vote%2C+never+by+a+model+alone" alt="QUARRY" />
+
+</div>
+
+<div align="center">
 
 [![Architecture](https://img.shields.io/badge/📐%20ARCHITECTURE-DEEP%20DIVE-4ADE80?style=for-the-badge)](./ARCHITECTURE.md)
 [![Quick Start](https://img.shields.io/badge/⚡%20QUICK%20START-GO-4ADE80?style=for-the-badge)](#quick-start)
@@ -8,9 +14,47 @@
 [![YOLOE](https://img.shields.io/badge/YOLOE--26-Open--Vocab%20Detection-4ADE80?style=for-the-badge)](#tech-stack)
 [![OSNet](https://img.shields.io/badge/OSNet-Re--ID-4ADE80?style=for-the-badge)](#tech-stack)
 
+</div>
+
+<p align="center">
+  <strong>Cyberwave Builders Program — Cohort 2</strong><br/>
+  Robot: <strong>Orion, the Outrider</strong> &nbsp;·&nbsp; Team: <strong>Fieldwork</strong>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Robot-Waveshare%20UGV%20Beast-1a1a1a?style=flat-square" />
+  <img src="https://img.shields.io/badge/Vision--only-No%20Lidar-1a1a1a?style=flat-square" />
+  <img src="https://img.shields.io/badge/Backend-FastAPI%20%2B%20WebSocket-1a1a1a?style=flat-square" />
+  <img src="https://img.shields.io/badge/Safety-2%20independent%20layers-1a1a1a?style=flat-square" />
+  <img src="https://img.shields.io/badge/Tests-22%20passing-brightgreen?style=flat-square&logo=pytest" />
+</p>
+
 ---
 
 > One real UGV runs the actual mission — an autonomous survey of 8 numbered objects, in order, inside a taped arena. Other real UGVs, dropped into the same Cyberwave twin from wherever they physically are, patrol as overwatch: sharing live position, watching for anyone who isn't part of the mission. A remote audience watches both the real camera feed and the twin environment side by side, and votes only on one question: does what the inner robot actually found match what the twin says lives there?
+
+---
+
+## 🎬 Demo Video
+
+[![QUARRY Demo](https://img.shields.io/badge/▶️%20WATCH%20THE%20DEMO-YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](#)
+
+> *Demo video link goes here once recorded — see [`demo_video_shot_list.md`](./demo_video_shot_list.md) for the exact shot-by-shot plan (3:00 hard cap, currently scripted to 2:50).*
+
+---
+
+## 📸 Screenshots
+
+| | |
+|---|---|
+| *`docs/screenshots/screenshot-arena.png`* | *`docs/screenshots/screenshot-missioncontrol.png`* |
+| **Taped arena, wide shot** — all 8 numbered objects visible, Orion at a waypoint | **Mission Control HUD** — live telemetry + sightings panel |
+| *`docs/screenshots/screenshot-capture.png`* | *`docs/screenshots/screenshot-proofgallery.png`* |
+| **Capture close-up** — object + printed marker number, readable in frame | **Proof gallery** — confirmed objects with location offset + OCR result |
+
+> Screenshots not yet committed — see **"What photos to actually take"** below for exactly what's worth capturing for this project.
+
+---
 
 ## What It Actually Is
 
@@ -154,6 +198,9 @@ quarry/
 ├── target_gallery.pkl                Generated OSNet gallery -- not committed, regenerate via register_mission_objects.py
 ├── frontend/
 │   └── index.html                    Mission Control HUD
+├── docs/
+│   ├── branding/                     Logo, banner, project marks
+│   └── screenshots/                  Arena, Mission Control, capture, proof gallery
 ├── find-quarry.ps1                   Auto-detects subnet, locates the Pi
 ├── requirements.txt
 └── .gitignore
@@ -220,7 +267,7 @@ python backend\teleop.py    # drive it, in a separate window
 # or: python backend\patrol.py    # autonomous sweep-drive alternative to manual teleop
 ```
 
-**Never run more than one drive process (`teleop.py` / `voice_control.py` / `inner_agent.py`'s own loop) against the same robot at the same time.**
+**Never run more than one drive process (`teleop.py` / `patrol.py` / `voice_control.py` / `inner_agent.py`'s own loop) against the same robot at the same time.**
 
 ### 8. Run the tests
 
@@ -256,6 +303,10 @@ Every one of these is a known, named gap — not a hidden one.
 
 ## Author
 
+<p align="center">
+  <img src="docs/branding/quarry-logo.png" alt="QUARRY seal" width="70" />
+</p>
+
 **Ashish Kumar** — B.Tech ECE, IIIT Guwahati (Batch 2024–2028)
 
 [![GitHub](https://img.shields.io/badge/GitHub-ashish--doing-181717?style=flat-square&logo=github)](https://github.com/ashish-doing) [![LinkedIn](https://img.shields.io/badge/LinkedIn-ashish--kumar-0A66C2?style=flat-square&logo=linkedin)](https://linkedin.com/in/ashish-kumar-014aaa3b9) [![HuggingFace](https://img.shields.io/badge/HuggingFace-ashish--doing-FFD21E?style=flat-square&logo=huggingface)](https://huggingface.co/ashish-doing)
@@ -268,4 +319,12 @@ MIT — see [LICENSE](./LICENSE) for details.
 
 ---
 
-Built for the **Cyberwave Builders Program — Cohort 2**.
+<div align="center">
+
+Built for the **Cyberwave Builders Program — Cohort 2**
+
+*Team Fieldwork · Robot: Orion, the Outrider*
+
+*Every survey is a question. Only a person gets to answer it.*
+
+</div>

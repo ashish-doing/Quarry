@@ -1,4 +1,25 @@
+<div align="center">
+
+<img src="docs/branding/quarry-logo.png" alt="QUARRY" width="80" />
+
 # QUARRY — System Architecture
+
+<p>
+  <img src="https://img.shields.io/badge/📄%20README-Overview-4ADE80?style=flat-square" />
+  <img src="https://img.shields.io/badge/Backend-FastAPI%20%2B%20WebSocket-1a1a1a?style=flat-square" />
+  <img src="https://img.shields.io/badge/CV-YOLOE--26%20%2B%20OSNet-1a1a1a?style=flat-square" />
+  <img src="https://img.shields.io/badge/Safety-2%20independent%20layers-1a1a1a?style=flat-square" />
+</p>
+
+*Part of [QUARRY](./README.md) — Cyberwave Builders Program, Cohort 2*
+
+</div>
+
+---
+
+**Jump to:** [Diagram](#architecture-diagram) · [Capture Flow](#data-flow--capture-to-confirmed-object) · [Intruder Flow](#data-flow--intruder-alert) · [Components](#component-reference) · [Key Stats](#key-stats) · [Coordinate Frames](#coordinate-frames) · [Safety](#safety-architecture) · [Env Vars](#environment-variables) · [Not Solved](#whats-deliberately-not-solved)
+
+---
 
 ## Overview
 
@@ -260,6 +281,22 @@ never runs without the emergency-stop active.
 
 ---
 
+## Runtime Requirements — Quick Reference
+
+Not previously called out in one place — pulled together here since it's exactly the kind of thing that trips up a fresh setup:
+
+| Package | Role | Notes |
+| --- | --- | --- |
+| `ultralytics` | YOLOE-26 detection | Pulls in `torch` — GPU (CUDA) strongly recommended, degrades to detection-disabled otherwise |
+| `torchreid` | OSNet re-identification | Same `torch` dependency as above; shares the GPU budget with detection |
+| `pytesseract` | OCR cross-check | Python binding only — the **Tesseract binary itself** must be installed separately on the machine (not pip-installable); see `ocr_check.py`'s Windows fallback-path handling |
+| `pupil-apriltags` | AprilTag detection | Needed for waypoint measurement and on-screen confirmation only, not a runtime nav dependency |
+| `websockets` | Field agent ↔ Hub relay | Used by `inner_agent.py` / `site_agent.py`, distinct from FastAPI's own WebSocket handling in `main.py` |
+| `groq`, `sounddevice`, `soundfile`, `keyboard` | `voice_control.py` only | Not needed unless voice control is actually used |
+| `pygame` | `teleop.py` only | Gamepad input handling |
+
+---
+
 ## What's Deliberately Not Solved
 
 Documented here rather than left implicit:
@@ -287,4 +324,10 @@ Documented here rather than left implicit:
 
 ---
 
-*Part of [QUARRY](./README.md) — Cyberwave Builders Program, Cohort 2.*
+<div align="center">
+
+*Part of [QUARRY](./README.md) — Cyberwave Builders Program, Cohort 2*
+
+*Team Fieldwork · Robot: Orion, the Outrider*
+
+</div>
