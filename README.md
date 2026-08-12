@@ -47,12 +47,12 @@
 
 | | |
 |---|---|
-| *`docs/screenshots/screenshot-arena.png`* | *`docs/screenshots/screenshot-missioncontrol.png`* |
-| **Taped arena, wide shot** — all 8 numbered objects visible, Orion at a waypoint | **Mission Control HUD** — live telemetry + sightings panel |
+| ![Arena](docs/screenshots/arena.jpeg) | ![Camera calibration](docs/screenshots/calibration.png) |
+| **Taped arena** — all 8 numbered objects laid out, Orion visible bottom-right | **Camera calibration in progress** — `calibrate_camera.py`'s checkerboard capture |
+| ![Cyberwave twin scene](docs/screenshots/twin-scene.png) | *`docs/screenshots/screenshot-missioncontrol.png`* |
+| **QUARRY_DEMO twin scene** — CoreZone/HuntZone, decoy objects, outer UGV slots modeled in Cyberwave's workbench | **Mission Control HUD** — live telemetry + sightings panel *(not yet committed)* |
 | *`docs/screenshots/screenshot-capture.png`* | *`docs/screenshots/screenshot-proofgallery.png`* |
-| **Capture close-up** — object + printed marker number, readable in frame | **Proof gallery** — confirmed objects with location offset + OCR result |
-
-> Screenshots not yet committed — see **"What photos to actually take"** below for exactly what's worth capturing for this project.
+| **Capture close-up** — object + printed marker number, readable in frame *(not yet committed)* | **Proof gallery** — confirmed objects with location offset + OCR result *(not yet committed)* |
 
 ---
 
