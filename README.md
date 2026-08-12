@@ -94,7 +94,7 @@ Underneath the mission framing is a real, named ML problem: **human-in-the-loop 
 
 ## Architecture
 
-```
+```mermaid
 flowchart LR
     subgraph Inner["INNER UGV (the actual mission)"]
         IUGV["UGV Beast\nPi 4B + ESP32\nno lidar, vision-only"]
@@ -303,9 +303,7 @@ Every one of these is a known, named gap — not a hidden one.
 
 ## Author
 
-<p align="center">
-  <img src="docs/branding/quarry-logo.png" alt="QUARRY seal" width="70" />
-</p>
+img src="docs/branding/quarry-logo.png" alt="QUARRY seal" width="90" />
 
 **Ashish Kumar** — B.Tech ECE, IIIT Guwahati (Batch 2024–2028)
 
