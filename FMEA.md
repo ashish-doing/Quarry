@@ -1,8 +1,37 @@
+<div align="center">
+
+<img src="docs/branding/quarry-logo.png" alt="QUARRY" width="80" />
+
 # QUARRY — Failure Mode and Effects Analysis (FMEA)
 
-Severity (S): 1 (negligible) – 5 (safety/data-loss critical)
-Likelihood (L): 1 (rare) – 5 (frequent, seen in testing)
-Risk = S × L. Mitigation column states what's actually built, not aspirational.
+<p>
+  <img src="https://img.shields.io/badge/📄%20README-Overview-4ADE80?style=flat-square" />
+  <img src="https://img.shields.io/badge/📐%20ARCHITECTURE-Deep%20Dive-4ADE80?style=flat-square" />
+  <img src="https://img.shields.io/badge/Method-Severity%20%C3%97%20Likelihood-1a1a1a?style=flat-square" />
+  <img src="https://img.shields.io/badge/29%20failure%20modes%20analyzed-F5A623?style=flat-square" />
+</p>
+
+*Part of [QUARRY](./README.md) — Cyberwave Builders Program, Cohort 2*
+
+</div>
+
+---
+
+**Jump to:** [Scoring](#scoring) · [Full Table](#failure-modes) · [At a Glance](#at-a-glance--by-component) · [Highest-Risk Open Items](#highest-risk-open-items-risk--9-not-yet-fully-mitigated)
+
+---
+
+## Scoring
+
+| | Scale | Meaning |
+| --- | --- | --- |
+| **Severity (S)** | 1–5 | 1 = negligible, 5 = safety/data-loss critical |
+| **Likelihood (L)** | 1–5 | 1 = rare, 5 = frequent, seen in testing |
+| **Risk** | S × L | Mitigation column states what's actually built, not aspirational |
+
+---
+
+## Failure Modes
 
 | # | Component | Failure Mode | Effect | S | L | Risk | Mitigation (built) |
 |---|---|---|---|---|---|---|---|
@@ -36,6 +65,35 @@ Risk = S × L. Mitigation column states what's actually built, not aspirational.
 | 26 | Navigation | Directed point-to-point steering | Wrong-direction drive from a bad yaw guess | 4 | — | — | **Deliberately not implemented anywhere** — quaternion→yaw conversion left unverified rather than guessed, in both `inner_agent.py`'s nav controller and `measure_waypoints.py`'s measurement method |
 | 27 | Video/remote | Remote spectator can't reach a same-machine-only annotated feed | Feature works locally, appears broken remotely | 2 | 5 | 10 | **Known, undocumented-as-fixed gap** — needs ngrok/tunnel, not yet built |
 
+---
+
+## At a Glance — By Component
+
+A quick scan of where the 29 analyzed failure modes concentrate — useful for prioritizing what to demo carefully vs. what's genuinely hardened:
+
+| Component | Failure modes analyzed | IDs |
+| --- | --- | --- |
+| Vision | 6 | #2, 3, 4, 5, 6, 6b |
+| Alerts | 3 | #16, 17, 18 |
+| Multiplayer | 3 | #13, 14, 15 |
+| Re-identification | 2 | #7, 7b |
+| Identity logic | 2 | #9, 10 |
+| Mission logic | 2 | #11, 12 |
+| Data flywheel | 2 | #19, 20 |
+| Robot control | 1 | #1 |
+| OCR | 1 | #8 |
+| AprilTag pipeline | 1 | #21 |
+| Waypoint measurement | 1 | #22 |
+| Digital twin sync | 1 | #23 |
+| Multi-site | 1 | #24 |
+| Voice control | 1 | #25 |
+| Navigation | 1 | #26 |
+| Video/remote | 1 | #27 |
+
+Vision carries the most analyzed failure modes — expected, since it's the layer everything else (identity, alerts, safety) ultimately depends on.
+
+---
+
 ## Highest-risk open items (Risk ≥ 9, not yet fully mitigated)
 
 - **#2 (Risk 15)** — CollisionGuard is a coarse bbox-area proxy, not true depth sensing. A hard hardware ceiling, not a software gap.
@@ -45,3 +103,13 @@ Risk = S × L. Mitigation column states what's actually built, not aspirational.
 - **#20 (Risk 9)** — has a real mitigation already built (data-volume gating); same reasoning as above.
 - **#25 (Risk 9)** — voice misrecognition is honestly bounded, not solved. Acceptable given voice control is lower-priority than the CV/safety/mission core.
 - **#27 (Risk 10)** — same-machine-only video is a known, real gap with no workaround built yet.
+
+---
+
+<div align="center">
+
+*Part of [QUARRY](./README.md) — Cyberwave Builders Program, Cohort 2*
+
+*Team Fieldwork · Robot: Orion, the Outrider*
+
+</div>
