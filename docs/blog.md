@@ -28,7 +28,7 @@ We built this on the Waveshare UGV Beast through the Cyberwave SDK, because the 
 
 ## The mission, in plain terms
 
-![Taped arena with all 8 numbered objects laid out, Orion visible in frame](screenshots/screenshot-arena.jpg)
+![Taped arena with all 8 numbered objects laid out, Orion visible in frame](screenshots/arena.jpeg)
 *The actual taped arena — 8 numbered objects laid out, Orion (bottom-right) ready to run the sequence.*
 
 One real **inner UGV** — vision-only, no lidar — drives to 8 numbered objects (cylinders, cones, boxes, in blue/pink marker paper) inside a taped arena, in strict sequential order: object 1, then 2, then 3, and so on. At each one, it stops, waits for a properly-framed shot, and runs three independent identity checks before reporting anything.
@@ -47,7 +47,7 @@ So navigation is **motion-derived**: the controller measures position before and
 
 Waypoint measurement itself uses the same philosophy. The original plan reserved two AprilTags as fixed reference markers and computed everything else relative to them — but with 8 real objects needing 8 real waypoints, there was no tag budget left for dedicated anchors. So we switched to **drive-and-center**: physically drive the robot to sit centered on each tag (the same act it'll do autonomously later), then record `get_pose()`'s (x, y) directly at that moment. The AprilTag detection shown on screen during this process is a confirmation aid only — "yes, I'm centered on tag 3" — never a measurement input. This sidesteps the yaw problem entirely: drive-and-center only ever needs position, never rotation.
 
-![Camera calibration checkerboard capture, in progress](screenshots/screenshot-calibration.png)
+![Camera calibration checkerboard capture, in progress](screenshots/calibration.png)
 *`calibrate_camera.py` mid-run — checkerboard capture for real camera intrinsics, a prerequisite for trustworthy AprilTag pose estimates. This step has to happen before any waypoint measurement is trusted.*
 
 ## Object identity: three independent signals, one primary
@@ -62,7 +62,7 @@ None of the three silently override each other or the human vote. Spectators see
 
 ## The digital twin side of the mission
 
-![Cyberwave QUARRY_DEMO twin scene — CoreZone, HuntZone, decoy objects, outer UGV slots](screenshots/screenshot-twin-scene.png)
+![Cyberwave QUARRY_DEMO twin scene — CoreZone, HuntZone, decoy objects, outer UGV slots](screenshots/twin-scene.png)
 *The `QUARRY_DEMO` scene in Cyberwave's workbench — CoreZone/HuntZone ground planes, decoy props (storage cabinet, task lamp, ladder, utility cart, equipment rack, work table, pallet stack, robot charging dock), a measured waypoint, and — notably — three unclaimed outer-UGV slots already modeled for the overwatch role.*
 
 This is the piece that makes the spectator vote meaningful: the twin isn't just a pretty visualization sitting next to the real feed, it's the other half of the identity check. When Orion reports "cone, object 02," the vote isn't "does this look like a cone" — it's "does this match what the twin says lives at that exact location." The `OuterSlot1/2/3_Unclaimed` entries in the scene are the twin-side placeholders for outer UGVs before anyone claims an overwatch role — visible proof the multi-site architecture isn't just a diagram, it's modeled in the actual environment.
