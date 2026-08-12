@@ -840,15 +840,63 @@ let feedRefreshTimer = null;
 // rather than faked.
 const LOCAL_FRAME_SERVER = "http://127.0.0.1:8099/latest.jpg";
 
+// Cyberwave Twin View -- a scoped, expiring "Share Link" (Viewer role only),
+// generated from Studio's Share modal -> Share Links section, NOT the
+// blanket "Public" visibility toggle. Leave empty to keep the honest
+// placeholder instead of an iframe. Because this is embedded in page source,
+// anyone with the deployed HUD's HTML can see this URL -- that's fine ONLY
+// because Share Links are Viewer-scoped and revocable/expiring; never put a
+// non-expiring or elevated-role link here.
+const TWIN_VIEW_URL = "https://cyberwave.com/environments/9383b6b2-0df7-4e99-8d9e-8a352eb6e1ab?share_key=d1KNJ9D5bAuTip5sKgkdWeTAV2yvGbbY12aVPFhpPuA"; // scoped Viewer share link, expires 9/15/2026 -- rotate before then
+
+// Rebuilding the whole feed stage (including recreating an <iframe>) on
+// every telemetry tick would reload the Cyberwave viewer several times a
+// second once a robot is actually running -- wasteful, and potentially
+// costly against API/usage limits. lastFeedKey tracks (site, tab) so the
+// stage HTML (img/iframe) only gets rebuilt when one of those actually
+// changes; telemetry ticks only touch the cheap ft-item numbers below.
+let lastFeedKey = null;
+
 function stopFeedRefresh() {
   if (feedRefreshTimer) clearInterval(feedRefreshTimer);
   feedRefreshTimer = null;
 }
 
+function renderFeedStage(site) {
+  if (activeFeedTab === "real") {
+    $("feed-video").innerHTML = `<img id="feed-img" src="${LOCAL_FRAME_SERVER}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+      <div class="feed-empty" style="position:absolute; inset:0; display:none;">No local feed reachable — is the relay process running on this machine?</div>`;
+    feedRefreshTimer = setInterval(() => {
+      const img = document.getElementById("feed-img");
+      if (img) img.src = `${LOCAL_FRAME_SERVER}?t=${Date.now()}`;
+    }, 300);
+  } else if (TWIN_VIEW_URL) {
+    // sandbox: allow-scripts + allow-same-origin are both required for
+    // Cyberwave's viewer to render at all (it's a full app, not a static
+    // image) -- but we deliberately withhold allow-top-navigation,
+    // allow-popups, allow-forms, and allow-pointer-lock, and set
+    // allow="" to block camera/mic/geolocation grants propagating in.
+    $("feed-video").innerHTML = `<iframe
+        src="${TWIN_VIEW_URL}"
+        sandbox="allow-scripts allow-same-origin"
+        allow=""
+        referrerpolicy="no-referrer"
+        loading="lazy"
+        style="width:100%; height:100%; border:0; display:block;"
+      ></iframe>`;
+  } else {
+    // No scoped link configured -- deliberately left as a labeled open
+    // question rather than a faked embed. See ARCHITECTURE.md's "What's
+    // Deliberately Not Solved."
+    $("feed-video").innerHTML = `<div class="feed-empty">Twin view for ${site.owner}'s site<span class="twin-badge">no TWIN_VIEW_URL configured — see ARCHITECTURE.md</span></div>`;
+  }
+}
+
 function renderFeedPanel() {
   const site = sites[followingSiteId];
-  stopFeedRefresh();
   if (!site) {
+    stopFeedRefresh();
+    lastFeedKey = null;
     $("feed-title").innerHTML = `Live Feed <span class="dim">— select a site</span>`;
     $("feed-video").innerHTML = `<div class="feed-empty">Open the Arena to pick a site to follow</div>`;
     $("feed-watchers").textContent = "";
@@ -859,19 +907,11 @@ function renderFeedPanel() {
   $("feed-title").innerHTML = `${site.owner}'s site <span class="dim">— ${roleLabel} · ${site.location || "?"}</span>`;
   $("feed-watchers").textContent = (site.followers || []).length ? `👁 ${site.followers.join(", ")}` : "";
 
-  if (activeFeedTab === "real") {
-    $("feed-video").innerHTML = `<img id="feed-img" src="${LOCAL_FRAME_SERVER}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-      <div class="feed-empty" style="position:absolute; inset:0; display:none;">No local feed reachable — is the relay process running on this machine?</div>`;
-    feedRefreshTimer = setInterval(() => {
-      const img = document.getElementById("feed-img");
-      if (img) img.src = `${LOCAL_FRAME_SERVER}?t=${Date.now()}`;
-    }, 300);
-  } else {
-    // Twin view -- deliberately left as a labeled open question rather than a
-    // faked embed. See ARCHITECTURE.md's "What's Deliberately Not Solved":
-    // what the Cyberwave twin viewer actually renders, and how it can be
-    // embedded here, hasn't been confirmed yet.
-    $("feed-video").innerHTML = `<div class="feed-empty">Twin view for ${site.owner}'s site<span class="twin-badge">embedding approach still being resolved — see ARCHITECTURE.md</span></div>`;
+  const key = `${followingSiteId}:${activeFeedTab}`;
+  if (key !== lastFeedKey) {
+    stopFeedRefresh();
+    renderFeedStage(site);
+    lastFeedKey = key;
   }
 
   const t = site.telemetry || {};
