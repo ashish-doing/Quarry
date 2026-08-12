@@ -464,44 +464,63 @@ function arenaLabel(text, color) {
   return sprite;
 }
 
+// WebGL isn't guaranteed -- headless/sandboxed browsers or a tab that's one
+// context too many can fail context creation. arenaAvailable gates every
+// other Three.js call so a WebGL failure degrades the minimap/arena only,
+// instead of throwing uncaught errors that could look like the whole app broke.
+let arenaAvailable = false;
+
 function initArena(containerId, onMarkerClick) {
   activeContainerId = containerId;
   const container = document.getElementById(containerId);
   const width = container.clientWidth, height = container.clientHeight;
 
-  scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0x0a0d0b, 60, 160);
-  camera = new THREE.PerspectiveCamera(45, width / (height || 1), 0.1, 600);
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setSize(width, height);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  container.innerHTML = "";
-  container.appendChild(renderer.domElement);
+  try {
+    scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x0a0d0b, 60, 160);
+    camera = new THREE.PerspectiveCamera(45, width / (height || 1), 0.1, 600);
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(width, height);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    container.innerHTML = "";
+    container.appendChild(renderer.domElement);
 
-  const grid = new THREE.GridHelper(140, 28, 0x24332a, 0x151f18);
-  scene.add(grid);
-  scene.add(new THREE.AmbientLight(0x6f8b7c, 1.0));
-  const key = new THREE.PointLight(0x4ade80, 1.0, 120);
-  key.position.set(0, 40, 0);
-  scene.add(key);
+    const grid = new THREE.GridHelper(140, 28, 0x24332a, 0x151f18);
+    scene.add(grid);
+    scene.add(new THREE.AmbientLight(0x6f8b7c, 1.0));
+    const key = new THREE.PointLight(0x4ade80, 1.0, 120);
+    key.position.set(0, 40, 0);
+    scene.add(key);
 
-  const sweepGeo = new THREE.CircleGeometry(70, 32, 0, Math.PI / 6);
-  const sweepMat = new THREE.MeshBasicMaterial({ color: 0x4ade80, transparent: true, opacity: 0.05, side: THREE.DoubleSide });
-  radarSweep = new THREE.Mesh(sweepGeo, sweepMat);
-  radarSweep.rotation.x = -Math.PI / 2;
-  radarSweep.position.y = 0.02;
-  scene.add(radarSweep);
+    const sweepGeo = new THREE.CircleGeometry(70, 32, 0, Math.PI / 6);
+    const sweepMat = new THREE.MeshBasicMaterial({ color: 0x4ade80, transparent: true, opacity: 0.05, side: THREE.DoubleSide });
+    radarSweep = new THREE.Mesh(sweepGeo, sweepMat);
+    radarSweep.rotation.x = -Math.PI / 2;
+    radarSweep.position.y = 0.02;
+    scene.add(radarSweep);
 
-  raycaster = new THREE.Raycaster();
-  bindControls(renderer.domElement, onMarkerClick);
-  animate();
-  window.addEventListener("resize", () => {
-    const el = document.getElementById(activeContainerId);
-    if (el) onResize(el);
-  });
+    raycaster = new THREE.Raycaster();
+    bindControls(renderer.domElement, onMarkerClick);
+    arenaAvailable = true;
+    animate();
+    window.addEventListener("resize", () => {
+      const el = document.getElementById(activeContainerId);
+      if (el) onResize(el);
+    });
+  } catch (err) {
+    console.warn("Arena unavailable -- WebGL context could not be created:", err);
+    arenaAvailable = false;
+    showArenaUnavailable(container);
+  }
+}
+
+function showArenaUnavailable(container) {
+  container.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;padding:8px;text-align:center;font-family:var(--font-mono);font-size:8px;color:var(--text-faint);line-height:1.5;">3D arena unavailable in this tab (no WebGL context) — site list is still live in the Squad panel</div>`;
+  $("minimap-expand").classList.add("hidden");
 }
 
 function remountArena(containerId) {
+  if (!arenaAvailable || !renderer) { showArenaUnavailable(document.getElementById(containerId)); return; }
   activeContainerId = containerId;
   const container = document.getElementById(containerId);
   container.innerHTML = "";
@@ -731,8 +750,8 @@ function revealHUD() {
   badge.classList.remove("hidden");
   badge.innerHTML = `<span class="avatar-badge">${myAvatar}</span>${myName} <span class="role-tag ${roleTagClass()}">${roleDisplayLabel()}</span>`;
   if (!arenaReady) {
+    arenaReady = true; // "attempted" -- set before init so we never retry on every join
     initArena("minimap-container", (siteId) => sendFollow(siteId));
-    arenaReady = true;
     renderArenaMarkers();
   }
 }
@@ -800,7 +819,7 @@ function renderAlertLog() {
 }
 
 function renderArenaMarkers() {
-  if (!arenaReady) return;
+  if (!arenaAvailable) return;
   Object.entries(sites).forEach(([siteId, site]) => upsertSiteMarker(siteId, site));
   removeStaleMarkers(Object.keys(sites));
   if (followingSiteId) highlightFollowed(followingSiteId);
@@ -811,7 +830,7 @@ function sendFollow(siteId) {
   followingSiteId = siteId;
   ws.send(JSON.stringify({ type: "follow", site_id: siteId }));
   renderFeedPanel();
-  if (arenaReady) highlightFollowed(siteId);
+  if (arenaAvailable) highlightFollowed(siteId);
 }
 
 let feedRefreshTimer = null;
@@ -958,19 +977,26 @@ function renderSightings() {
     list.innerHTML = `<li class="id-card empty">No pending sightings.</li>`;
     return;
   }
+  // Voting is a Spectator activity per the mission design -- Field Agents are
+  // running their own robot, and an agent confirming/disputing its own site's
+  // sighting would be a conflict of interest. The Hub doesn't gate this
+  // server-side, so we gate it here: agents get a read-only tally instead.
+  const canVote = myRole === "spectator";
   for (const [id, entry] of openSightings) {
     const { data, confirms = 0, disputes = 0, myVote } = entry;
     const li = document.createElement("li");
     li.className = `id-card${data.ocr_anomaly ? " anomaly" : ""}`;
-    li.innerHTML = identityCardHTML(data, { showConfidence: true }) + `
+    const actions = canVote ? `
       <div class="id-card-actions">
         <button class="btn-confirm" data-id="${id}" data-site="${data.site_id}" data-vote="confirm" ${myVote === "confirm" ? "disabled" : ""}>CONFIRM</button>
         <button class="btn-dispute" data-id="${id}" data-site="${data.site_id}" data-vote="dispute" ${myVote === "dispute" ? "disabled" : ""}>DISPUTE</button>
-      </div>
+      </div>` : "";
+    li.innerHTML = identityCardHTML(data, { showConfidence: true }) + actions + `
       <div class="id-card-tally">confirms: ${confirms} · disputes: ${disputes}${myVote ? ` · you voted ${myVote}` : ""}</div>
     `;
     list.appendChild(li);
   }
+  if (!canVote) return;
   list.querySelectorAll("button[data-id]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const id = btn.dataset.id, siteId = btn.dataset.site, vote = btn.dataset.vote;
@@ -1100,7 +1126,7 @@ function connect() {
       case "candidate":
         openSightings.set(msg.id, { data: msg, confirms: 0, disputes: 0 });
         renderSightings();
-        if (arenaReady) pulseNewCandidate(msg.site_id);
+        if (arenaAvailable) pulseNewCandidate(msg.site_id);
         toast(`New sighting: ${msg.label} (${(msg.confidence * 100).toFixed(0)}%)`, "warn");
         break;
 
@@ -1124,11 +1150,26 @@ function connect() {
         toast(`Disputed away: ${msg.label} @ ${msg.waypoint}`, "warn");
         break;
 
-      case "site_removed":
+      case "site_removed": {
+        const removedOwner = sites[msg.site_id]?.owner || msg.site_id;
         delete sites[msg.site_id];
         if (msg.site_id === followingSiteId) { followingSiteId = null; renderFeedPanel(); }
         renderArenaMarkers();
+        // The Hub drops a site's pending candidates along with the site
+        // itself on disconnect. Voting on an orphaned card silently no-ops
+        // server-side (no matching site to look the vote up against), so we
+        // pull any of its cards out of Active Sightings rather than leave a
+        // dead "confirm/dispute" card behind.
+        let purged = false;
+        for (const [id, entry] of openSightings) {
+          if (entry.data.site_id === msg.site_id) { openSightings.delete(id); purged = true; }
+        }
+        if (purged) {
+          renderSightings();
+          toast(`${removedOwner} disconnected — its pending sightings were dropped`, "warn");
+        }
         break;
+      }
 
       case "followers_update":
         if (sites[msg.site_id]) sites[msg.site_id].followers = msg.followers;
