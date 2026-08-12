@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QUARRY — Cyberwave Builders Program, Cohort 2</title>
+<style>
+  :root{
+    --bg:#0a0f0c;
+    --bg-alt:#0d1310;
+    --panel:#111813;
+    --panel-alt:#161f18;
+    --border:#233028;
+    --border-soft:#1a251e;
+    --text-primary:#e9f0ea;
+    --text-dim:#8ea095;
+    --text-faint:#5a6a60;
+    --green:#4ade80;
+    --green-dim:#2f6b46;
+    --orange:#f5a623;
+    --blue:#38bdf8;
+    --red:#f0453a;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Consolas, "Roboto Mono", monospace;
+    --sans: ui-sans-serif, -apple-system, "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html{scroll-snap-type:y mandatory; scroll-behavior:smooth;}
+  body{
+    background:var(--bg);
+    color:var(--text-primary);
+    font-family:var(--sans);
+    overflow-x:hidden;
+  }
+  ::selection{ background:var(--green-dim); color:#fff; }
+
+  /* faint scanline / grid texture, evokes a camera HUD without being loud */
+  .grid-bg{
+    position:fixed; inset:0; z-index:0; pointer-events:none;
+    background-image:
+      linear-gradient(rgba(74,222,128,0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(74,222,128,0.035) 1px, transparent 1px);
+    background-size: 42px 42px;
+    mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 40%, transparent 90%);
+  }
+
+  .navdots{
+    position:fixed; right:22px; top:50%; transform:translateY(-50%);
+    z-index:50; display:flex; flex-direction:column; gap:14px;
+  }
+  .navdots a{
+    width:8px; height:8px; border-radius:50%;
+    background:var(--border); display:block;
+    transition:background .25s, transform .25s;
+  }
+  .navdots a.active{ background:var(--green); transform:scale(1.35); }
+
+  .slide{
+    min-height:100vh; width:100%;
+    display:flex; flex-direction:column; justify-content:center;
+    position:relative; z-index:1;
+    padding: 8vh 8vw;
+    scroll-snap-align:start;
+    border-bottom:1px solid var(--border-soft);
+  }
+
+  .eyebrow{
+    font-family:var(--mono); font-size:12px; letter-spacing:3px;
+    color:var(--green); text-transform:uppercase; margin-bottom:18px;
+    display:flex; align-items:center; gap:10px;
+  }
+  .eyebrow::before{
+    content:""; width:22px; height:1px; background:var(--green); display:inline-block;
+  }
+
+  h1{
+    font-family:var(--mono); font-weight:700;
+    font-size:clamp(48px, 9vw, 118px);
+    letter-spacing:-1px; line-height:0.95;
+    color:var(--text-primary);
+  }
+  h2{
+    font-family:var(--sans); font-weight:700;
+    font-size:clamp(30px, 4.4vw, 54px);
+    letter-spacing:-0.5px; line-height:1.08;
+    max-width: 18ch;
+    margin-bottom:22px;
+  }
+  .lede{
+    font-size:clamp(16px, 1.5vw, 20px);
+    color:var(--text-dim); max-width:56ch; line-height:1.6;
+    font-weight:400;
+  }
+  .mono-tag{
+    font-family:var(--mono); font-size:12px; color:var(--text-faint);
+    letter-spacing:1px;
+  }
+
+  /* --- Slide 1: Hero --- */
+  #hero{ background:radial-gradient(ellipse 70% 50% at 50% 30%, rgba(74,222,128,0.06), transparent 70%); }
+  .hero-badge-row{
+    display:flex; gap:10px; flex-wrap:wrap; margin:26px 0 34px;
+  }
+  .badge{
+    font-family:var(--mono); font-size:11px; padding:6px 12px;
+    border:1px solid var(--border); border-radius:3px; color:var(--text-dim);
+    letter-spacing:0.5px;
+  }
+  .hero-quote{
+    border-left:2px solid var(--green);
+    padding-left:20px; margin-top:36px; max-width:62ch;
+    color:var(--text-dim); font-size:16px; line-height:1.65; font-style:normal;
+  }
+  .scroll-hint{
+    position:absolute; bottom:6vh; left:8vw;
+    font-family:var(--mono); font-size:11px; color:var(--text-faint);
+    letter-spacing:2px; display:flex; align-items:center; gap:8px;
+  }
+  .scroll-hint .arrow{ animation: bob 1.8s ease-in-out infinite; }
+  @keyframes bob{ 0%,100%{transform:translateY(0);} 50%{transform:translateY(5px);} }
+
+  /* --- Slide 2: Problem --- */
+  .compare{
+    display:grid; grid-template-columns:1fr 1fr; gap:22px;
+    margin-top:40px; max-width:900px;
+  }
+  .compare-card{
+    background:var(--panel); border:1px solid var(--border);
+    border-radius:6px; padding:26px;
+  }
+  .compare-card.bad{ border-color:#3a2420; }
+  .compare-card.good{ border-color:var(--green-dim); }
+  .compare-label{
+    font-family:var(--mono); font-size:11px; letter-spacing:1.5px;
+    margin-bottom:14px; display:block;
+  }
+  .compare-card.bad .compare-label{ color:var(--red); }
+  .compare-card.good .compare-label{ color:var(--green); }
+  .compare-flow{ font-family:var(--mono); font-size:13.5px; color:var(--text-dim); line-height:2.1; }
+  .compare-flow b{ color:var(--text-primary); font-weight:600; }
+
+  /* --- Slide 3: Solution --- */
+  .role-grid{
+    display:grid; grid-template-columns:repeat(3,1fr); gap:18px;
+    margin-top:38px; max-width:1080px;
+  }
+  .role-card{
+    background:var(--panel); border:1px solid var(--border); border-radius:6px;
+    padding:24px 22px; position:relative; overflow:hidden;
+  }
+  .role-card::before{
+    content:""; position:absolute; top:0; left:0; right:0; height:2px;
+  }
+  .role-card.inner::before{ background:var(--blue); }
+  .role-card.outer::before{ background:var(--orange); }
+  .role-card.spectator::before{ background:var(--green); }
+  .role-name{ font-family:var(--mono); font-size:12px; letter-spacing:1.5px; margin-bottom:10px; }
+  .role-card.inner .role-name{ color:var(--blue); }
+  .role-card.outer .role-name{ color:var(--orange); }
+  .role-card.spectator .role-name{ color:var(--green); }
+  .role-desc{ font-size:14.5px; color:var(--text-dim); line-height:1.65; }
+
+  .waypoint-track{
+    margin-top:46px; display:flex; align-items:center; gap:0; flex-wrap:wrap;
+    max-width:1080px;
+  }
+  .wp{
+    display:flex; flex-direction:column; align-items:center; gap:6px;
+    font-family:var(--mono); font-size:10px; color:var(--text-faint);
+  }
+  .wp-icon{
+    width:30px; height:30px; border:1.5px solid var(--border); border-radius:5px;
+    display:flex; align-items:center; justify-content:center;
+    background:var(--panel-alt); font-size:14px;
+  }
+  .wp.done .wp-icon{ border-color:var(--green); color:var(--green); }
+  .wp-connector{ width:20px; height:1px; background:var(--border); margin:0 2px 18px; }
+
+  /* --- Slide 4: Tech stack --- */
+  .stack{
+    margin-top:36px; max-width:760px; display:flex; flex-direction:column; gap:0;
+  }
+  .stack-row{
+    display:grid; grid-template-columns:150px 1fr; gap:22px;
+    padding:16px 0; border-bottom:1px solid var(--border-soft);
+    align-items:baseline;
+  }
+  .stack-row:first-child{ border-top:1px solid var(--border-soft); }
+  .stack-layer{ font-family:var(--mono); font-size:11px; letter-spacing:1px; color:var(--text-faint); text-transform:uppercase; }
+  .stack-detail b{ color:var(--text-primary); font-weight:600; }
+  .stack-detail{ font-size:14.5px; color:var(--text-dim); line-height:1.5; }
+
+  /* --- Slide 5: Honest status --- */
+  .status-grid{
+    display:grid; grid-template-columns:1fr 1fr; gap:12px;
+    margin-top:36px; max-width:980px;
+  }
+  .status-row{
+    display:flex; justify-content:space-between; align-items:center; gap:16px;
+    background:var(--panel); border:1px solid var(--border-soft); border-radius:5px;
+    padding:14px 18px;
+  }
+  .status-name{ font-size:13.5px; color:var(--text-primary); }
+  .status-pill{
+    font-family:var(--mono); font-size:10.5px; letter-spacing:0.5px;
+    padding:4px 10px; border-radius:20px; white-space:nowrap;
+  }
+  .status-pill.done{ background:rgba(74,222,128,0.12); color:var(--green); border:1px solid var(--green-dim); }
+  .status-pill.progress{ background:rgba(245,166,35,0.1); color:var(--orange); border:1px solid #5c4319; }
+  .honest-note{
+    margin-top:30px; font-family:var(--mono); font-size:12px; color:var(--text-faint);
+    max-width:60ch; line-height:1.7;
+  }
+
+  /* --- Slide 6: Close --- */
+  #close{ align-items:flex-start; }
+  .close-links{ display:flex; gap:14px; margin-top:30px; flex-wrap:wrap; }
+  .link-pill{
+    font-family:var(--mono); font-size:13px; color:var(--text-primary);
+    border:1px solid var(--border); padding:10px 18px; border-radius:4px;
+    text-decoration:none; letter-spacing:0.5px;
+    transition:border-color .2s, color .2s;
+  }
+  .link-pill:hover{ border-color:var(--green); color:var(--green); }
+  .close-footer{ margin-top:70px; font-family:var(--mono); font-size:11px; color:var(--text-faint); letter-spacing:1px; }
+
+  @media (max-width:760px){
+    .compare, .role-grid, .status-grid{ grid-template-columns:1fr; }
+    .stack-row{ grid-template-columns:1fr; gap:6px; }
+    .navdots{ display:none; }
+  }
+  @media (prefers-reduced-motion: reduce){
+    html{ scroll-behavior:auto; }
+    .arrow{ animation:none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="grid-bg"></div>
+
+<nav class="navdots" id="navdots">
+  <a href="#hero" class="active"></a>
+  <a href="#problem"></a>
+  <a href="#solution"></a>
+  <a href="#stack"></a>
+  <a href="#status"></a>
+  <a href="#close"></a>
+</nav>
+
+<!-- SLIDE 1: HERO -->
+<section class="slide" id="hero">
+  <div class="eyebrow">Cyberwave Builders Program — Cohort 2</div>
+  <h1>QUARRY</h1>
+  <div class="hero-badge-row">
+    <span class="badge">YOLOE-26 · Open-Vocab Detection</span>
+    <span class="badge">OSNet · Re-ID</span>
+    <span class="badge">Vision-only · No Lidar</span>
+  </div>
+  <p class="lede">One real UGV runs an autonomous survey of 8 numbered objects, in strict order, inside a taped arena. Every single thing it finds goes to a human vote before it counts as confirmed.</p>
+  <blockquote class="hero-quote">
+    Underneath the mission framing is a real, named ML problem: human-in-the-loop verification to reduce false positives in autonomous vision — the same architecture behind citizen-science wildlife camera-trap labeling and content-moderation triage.
+  </blockquote>
+  <div class="scroll-hint"><span>SCROLL</span><span class="arrow">↓</span></div>
+</section>
+
+<!-- SLIDE 2: PROBLEM -->
+<section class="slide" id="problem">
+  <div class="eyebrow">The Problem</div>
+  <h2>Autonomous vision fails quietly.</h2>
+  <p class="lede">A model saying "detected: object" isn't the same as the object actually being there. Most demos stop at detection. QUARRY starts from what happens after — because that's where trust in a real system actually gets built.</p>
+
+  <div class="compare">
+    <div class="compare-card bad">
+      <span class="compare-label">WHAT MOST PIPELINES SHIP</span>
+      <div class="compare-flow">
+        camera frame<br>
+        &nbsp;&nbsp;↓<br>
+        <b>model says "found it"</b><br>
+        &nbsp;&nbsp;↓<br>
+        logged as true
+      </div>
+    </div>
+    <div class="compare-card good">
+      <span class="compare-label">WHAT QUARRY SHIPS</span>
+      <div class="compare-flow">
+        camera frame<br>
+        &nbsp;&nbsp;↓<br>
+        OSNet match <b>+ independent OCR cross-check</b><br>
+        &nbsp;&nbsp;↓<br>
+        <b>a human votes confirm / dispute</b><br>
+        &nbsp;&nbsp;↓<br>
+        only then: logged as true
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SLIDE 3: SOLUTION -->
+<section class="slide" id="solution">
+  <div class="eyebrow">The Solution</div>
+  <h2>Three roles, one verification loop.</h2>
+  <p class="lede">The mission is split by what each participant is actually good at — a robot that measures instead of guesses, other robots that just watch, and people who make the final call.</p>
+
+  <div class="role-grid">
+    <div class="role-card inner">
+      <div class="role-name">INNER UGV</div>
+      <div class="role-desc">Drives to all 8 objects in strict numeric order. Heading derived from measured position, never a guessed yaw. Cross-checks OSNet's match against an independent OCR read of the object's printed number.</div>
+    </div>
+    <div class="role-card outer">
+      <div class="role-name">OUTER UGVs</div>
+      <div class="role-desc">Anyone else's real hardware, their own space. Share live position, raise an immediate alert the moment their own vision spots an unregistered person nearby. No voting gate — speed over consensus.</div>
+    </div>
+    <div class="role-card spectator">
+      <div class="role-name">SPECTATORS</div>
+      <div class="role-desc">Watch the real camera feed and the Cyberwave twin together. Confirm or dispute: does what the robot actually captured match what the twin says lives there?</div>
+    </div>
+  </div>
+
+  <div class="waypoint-track" id="wptrack">
+    <span class="mono-tag" style="margin-right:16px;">SEQUENTIAL VISIT ORDER →</span>
+  </div>
+</section>
+
+<!-- SLIDE 4: TECH STACK -->
+<section class="slide" id="stack">
+  <div class="eyebrow">How It's Built</div>
+  <h2>Every layer, named.</h2>
+  <p class="lede">No unnamed magic — each piece of the stack is a specific, swappable technology, chosen for what this hardware can and can't do.</p>
+
+  <div class="stack">
+    <div class="stack-row">
+      <div class="stack-layer">Robot</div>
+      <div class="stack-detail"><b>Waveshare UGV Beast</b> — Pi 4B + ESP32, vision-only, no lidar</div>
+    </div>
+    <div class="stack-row">
+      <div class="stack-layer">Platform</div>
+      <div class="stack-detail"><b>Cyberwave SDK + edge-core</b> — pairing, MQTT telemetry, shared digital twin</div>
+    </div>
+    <div class="stack-row">
+      <div class="stack-layer">Detection</div>
+      <div class="stack-detail"><b>YOLOE-26</b> (ultralytics) — real-time open-vocabulary object detection</div>
+    </div>
+    <div class="stack-row">
+      <div class="stack-layer">Re-ID</div>
+      <div class="stack-detail"><b>OSNet</b> (torchreid, osnet_x0_25) — appearance-based re-matching, persisted gallery</div>
+    </div>
+    <div class="stack-row">
+      <div class="stack-layer">Identity check</div>
+      <div class="stack-detail"><b>Tesseract</b> (pytesseract) — independent OCR read of printed marker numbers</div>
+    </div>
+    <div class="stack-row">
+      <div class="stack-layer">Navigation</div>
+      <div class="stack-detail"><b>Motion-derived heading</b> — closed-loop, measured, never a guessed yaw</div>
+    </div>
+    <div class="stack-row">
+      <div class="stack-layer">Safety</div>
+      <div class="stack-detail"><b>CollisionGuard + driver watchdog</b> — two independent layers</div>
+    </div>
+    <div class="stack-row">
+      <div class="stack-layer">Backend</div>
+      <div class="stack-detail"><b>FastAPI + WebSocket</b> — multi-site Hub, inner/outer roles, voting, alerts</div>
+    </div>
+  </div>
+</section>
+
+<!-- SLIDE 5: HONEST STATUS -->
+<section class="slide" id="status">
+  <div class="eyebrow">What's Actually Working</div>
+  <h2>No slide claims what the repo can't back up.</h2>
+  <p class="lede">Every status below matches the project's own README — nothing here is aspirational.</p>
+
+  <div class="status-grid">
+    <div class="status-row"><span class="status-name">Cyberwave pairing + live frame retrieval</span><span class="status-pill done">CONFIRMED</span></div>
+    <div class="status-row"><span class="status-name">Two independent safety layers</span><span class="status-pill done">VERIFIED</span></div>
+    <div class="status-row"><span class="status-name">CV pipeline — YOLOE-26 + OSNet, temporal smoothing</span><span class="status-pill done">CONFIRMED</span></div>
+    <div class="status-row"><span class="status-name">OCR cross-check against OSNet's match</span><span class="status-pill done">BUILT</span></div>
+    <div class="status-row"><span class="status-name">Sequential nav controller, unit-tested</span><span class="status-pill done">BUILT</span></div>
+    <div class="status-row"><span class="status-name">Multi-site Hub — voting, rate limiting</span><span class="status-pill done">BUILT</span></div>
+    <div class="status-row"><span class="status-name">AprilTag waypoint measurement</span><span class="status-pill progress">CODE COMPLETE — not yet run at venue</span></div>
+    <div class="status-row"><span class="status-name">OSNet head fine-tuning</span><span class="status-pill progress">GATED — blocked on data volume</span></div>
+    <div class="status-row"><span class="status-name">Dual real-feed + twin-view panel</span><span class="status-pill progress">IN PROGRESS</span></div>
+    <div class="status-row"><span class="status-name">Remote video tunneling</span><span class="status-pill progress">NOT YET BUILT</span></div>
+  </div>
+
+  <p class="honest-note">Every gap above is a known, named limitation documented in the repo's own README and FMEA — not something surfaced for the first time here.</p>
+</section>
+
+<!-- SLIDE 6: CLOSE -->
+<section class="slide" id="close">
+  <div class="eyebrow">Cyberwave Builders Program — Cohort 2</div>
+  <h1 style="font-size:clamp(40px,7vw,84px);">QUARRY</h1>
+  <p class="lede" style="margin-top:18px;">Real hardware, real vision, no depth sensor — and nothing claimed that isn't actually working.</p>
+  <div class="close-links">
+    <a class="link-pill" href="https://github.com/ashish-doing/Quarry" target="_blank" rel="noopener">github.com/ashish-doing/Quarry</a>
+    <a class="link-pill" href="https://linkedin.com/in/ashish-kumar-014aaa3b9" target="_blank" rel="noopener">linkedin.com/in/ashish-kumar</a>
+  </div>
+  <div class="close-footer">ASHISH KUMAR · B.TECH ECE, IIIT GUWAHATI · BATCH 2024–2028</div>
+</section>
+
+<script>
+  // signature waypoint track: 8 objects, sequence is real content here
+  const objects = [
+    {shape:'▮', color:'#38bdf8'}, // 01 blue cylinder
+    {shape:'▮', color:'#38bdf8'}, // 02 blue cylinder
+    {shape:'▮', color:'#f472b6'}, // 03 pink cylinder
+    {shape:'▮', color:'#f472b6'}, // 04 pink cylinder
+    {shape:'▲', color:'#38bdf8'}, // 05 blue cone
+    {shape:'▲', color:'#f472b6'}, // 06 pink cone
+    {shape:'■', color:'#38bdf8'}, // 07 blue box
+    {shape:'■', color:'#f472b6'}, // 08 pink box
+  ];
+  const track = document.getElementById('wptrack');
+  objects.forEach((o, i) => {
+    const wp = document.createElement('div');
+    wp.className = 'wp done';
+    wp.innerHTML = `<div class="wp-icon" style="color:${o.color}; border-color:${o.color}44;">${o.shape}</div><span>W${i+1}</span>`;
+    track.appendChild(wp);
+    if(i < objects.length - 1){
+      const c = document.createElement('div');
+      c.className = 'wp-connector';
+      track.appendChild(c);
+    }
+  });
+
+  // nav dot active state + click-to-scroll
+  const dots = document.querySelectorAll('#navdots a');
+  const slides = document.querySelectorAll('.slide');
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if(e.isIntersecting){
+        dots.forEach(d => d.classList.remove('active'));
+        const match = document.querySelector(`#navdots a[href="#${e.target.id}"]`);
+        if(match) match.classList.add('active');
+      }
+    });
+  }, {threshold:0.5});
+  slides.forEach(s => io.observe(s));
+</script>
+
+</body>
+</html>
