@@ -303,7 +303,9 @@ Every one of these is a known, named gap — not a hidden one.
 
 ## Author
 
-img src="docs/branding/quarry-logo.png" alt="QUARRY seal" width="90" />
+<p align="center">
+    img src="docs/branding/quarry-logo.png" alt="QUARRY seal" width="90" />
+</p>
 
 **Ashish Kumar** — B.Tech ECE, IIIT Guwahati (Batch 2024–2028)
 
