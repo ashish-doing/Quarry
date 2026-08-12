@@ -41,7 +41,7 @@ import cv2
 import numpy as np
 
 CHECKERBOARD_SIZE = (9, 6)   # internal corners, (columns, rows) -- NOT square count
-SQUARE_SIZE_M = 0.025        # 2.5cm squares -- MEASURE YOUR OWN PRINTOUT, don't trust this default
+SQUARE_SIZE_M =  0.024        # 2.4cm squares -- MEASURE YOUR OWN PRINTOUT, don't trust this default
 MIN_CAPTURES = 12
 OUTPUT_PATH = os.path.join(os.path.dirname(__file__), "camera_intrinsics.json")
 
