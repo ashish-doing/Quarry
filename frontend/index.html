@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>QUARRY // Mission Control</title>
-<link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAACXBIWXMAAAsTAAALEwEAmpwYAAAB4UlEQVR4nO2ZwU7DMBBE38b/wIkzX8CVCyfODVw4cUZCiK9AXCoOSPACD4ntTBw7cWLHVqLKUlM33t3ZzXqTNuKfEQK6BHGBEEIIIYQQQoifYAtAK+1Sa+21tj7GuNRaR2vt2XPeCPUxxonWWvfe3wA+aq2fWuvbGON5Dtcv0FprY4x5aq3vAB6UUneMse/9c9+jaZoJgKcYY9dae4wxThFCV0RcxRhPvfebtm1nrbXFEIkAdyLyGGP8CCFsRWTfNM1DjPGYc/6IMe7GcXwFcHnJRAEuvfcfKaVzjHFPRK+I6ICcijrCfZBuqDzBWp3qSrBEZCqBUfQVz4CWGHWF91iaEwIQQduM47u++qKrqPYSw8t6/i8gDgKfvpQGgqqp3EVn5vt+p6ktKydcMyIKI2xijPeeUcz6HEDZ/gYT/gcOJVfXojDkAzE3TzMxs9wcW+E1FVU/uPjezVXsPCH8Xd3d3D8w8B7BqmmZWluU0hHDdJvcXwjAMYzMbAliY2VZVj0S0lpe2gO8AAAAASUVORK5CYII=">
+<link rel="icon" href="data:image/png;base64,iVBORw0CcijrCfZBuqDzBWp3qSrBEZCqBUfQVz4CWGHWF91iaEwlEQVR4nO2ZwU7DMBBE38b/wIkzX8CVCyfODVw4cUZCiK9AXCoOSPACD4ntTBw7cWLHVqLKUlM33t3ZzXqTNuKfEQK6BHGBEEIIIYQQQoifYAtAK+1Sa+21tj7GuNRaR2vt2XPeCPUxxonWWvfe3wA+aq2fWuvbGON5Dtcv0FprY4x5aq3vAB6UUneMse/9c9+jaZoJgKcYY9dae4wxThFCV0RcxRhPvfebtm1nrbXFEIkAdyLyGGP8CCFsRWTfNM1DjPGYc/6IMe7GcXwFcHnJRAEuvfcfKaVzjHFPRK+I6ICcijrCfZBuqDzBWp3qSrBEZCqBUfQVz4CWGHWF91iaEwIQQduM47u++qKrqPYSw8t6/i8gDgKfvpQGgqqp3EVn5vt+p6ktKydcMyIKI2xijPeeUcz6HEDZ/gYT/gcOJVfXojDkAzE3TzMxs9wcW+E1FVU/uPjezVXsPCH8Xd3d3D8w8B7BqmmZWluU0hHDdJvcXwjAMYzMbAliY2VZVj0S0lpe2gO8AAAAASUVORK5CYII=">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -828,6 +828,18 @@ function renderArenaMarkers() {
   if (followingSiteId) highlightFollowed(followingSiteId);
 }
 
+/* Re-checks for the Inner site any time our world-state changes, instead of
+   only once at page load ("init"). Root cause this fixes: if Inner isn't
+   connected at the exact moment a Spectator's tab first connects, the old
+   one-shot check in "init" never ran again -- the Spectator was stuck on
+   "select a site" forever, even after Inner (re)joined seconds later. Called
+   from init/site_update/presence so it keeps retrying as the world changes. */
+function maybeAutoFollowInner() {
+  if (myRole !== "spectator" || followingSiteId) return;
+  const innerSite = Object.entries(sites).find(([, s]) => s.role === "inner");
+  if (innerSite) sendFollow(innerSite[0]);
+}
+
 /* Only Spectators watch feeds -- Field Agents are busy running their own
    robot, and a field agent "following" (and thereby broadcasting a watch
    event for) their OWN site was the root cause of the confusing
@@ -851,6 +863,10 @@ let feedRefreshTimer = null;
 // needs a real tunnel (ngrok or similar) which isn't built. Left honest
 // rather than faked.
 
+// Inner (manual_cv_demo.py) serves its annotated frame on 8098; Outer
+// (site_agent.py) serves on 8099. Confirmed against manual_cv_demo.py's
+// own FRAME_SERVER_PORT constant and comment ("matches inner_agent.py's
+// port -- frontend expects this for 'inner' sites").
 function localFrameServerUrl(site) {
   const port = site.role === "inner" ? 8098 : 8099;
   return `http://127.0.0.1:${port}/latest.jpg`;
@@ -863,7 +879,13 @@ function localFrameServerUrl(site) {
 // anyone with the deployed HUD's HTML can see this URL -- that's fine ONLY
 // because Share Links are Viewer-scoped and revocable/expiring; never put a
 // non-expiring or elevated-role link here.
-const TWIN_VIEW_URL = "https://cyberwave.com/environments/9383b6b2-0df7-4e99-8d9e-8a352eb6e1ab?share_key=d1KNJ9D5bAuTip5sKgkdWeTAV2yvGbbY12aVPFhpPuA"; // scoped Viewer share link, expires 9/15/2026 -- rotate before then
+//
+// !! REPLACE THIS with YOUR real, current, non-expired Viewer share link
+// from Cyberwave Studio -> Share -> Share Links. The value below is a
+// placeholder from an earlier session and is very likely why Twin View
+// isn't rendering -- if it's stale, revoked, or was never actually yours,
+// the iframe just fails silently.
+const TWIN_VIEW_URL = "https://cyberwave.com/environments/9383b6b2-0df7-4e99-8d9e-8a352eb6e1ab?share_key=d1KNJ9D5bAuTip5sKgkdWeTAV2yvGbbY12aVPFhpPuA"; // TODO: confirm this is your real, unexpired share link
 
 // Rebuilding the whole feed stage (including recreating an <iframe>) on
 // every telemetry tick would reload the Cyberwave viewer several times a
@@ -1164,10 +1186,7 @@ function connect() {
           openSightings.set(c.id, { data: c, confirms: 0, disputes: 0 })));
         renderSightings();
         renderProofGallery();
-        if (myRole === "spectator") {
-          const innerSite = Object.entries(sites).find(([, s]) => s.role === "inner");
-          if (innerSite) sendFollow(innerSite[0]);
-        }
+        maybeAutoFollowInner();
         playDropSequence();
         break;
 
@@ -1179,6 +1198,7 @@ function connect() {
       case "presence":
         players = msg.players;
         renderSquad();
+        maybeAutoFollowInner();
         break;
 
       case "activity":
@@ -1196,6 +1216,7 @@ function connect() {
         }
         sites[msg.site_id].telemetry = msg.telemetry;
         renderArenaMarkers();
+        maybeAutoFollowInner();
         if (msg.site_id === followingSiteId) renderFeedPanel();
         break;
 

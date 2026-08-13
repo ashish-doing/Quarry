@@ -21,6 +21,15 @@ show even between captures.
 If the Hub isn't reachable (e.g. you haven't started
 `uvicorn backend.main:app --port 8001` yet), this degrades gracefully --
 detection still runs and prints locally, it just won't appear in the UI.
+
+The Hub client auto-reconnects (retry loop below) instead of connecting
+once -- the earlier one-shot version would silently and permanently drop
+out of the Hub on the first disconnect (observed happening ~11s after
+join, most likely a ping/pong timeout caused by the blocking cv2 loop
+holding the GIL long enough that the background asyncio thread can't
+service the websocket in time). This is a band-aid, not a fix for that
+underlying timeout -- but it means Inner comes back on its own instead
+of requiring you to notice and restart the script mid-demo.
 """
 import os
 import base64
@@ -44,6 +53,7 @@ _latest_jpeg = None
 HUB_WS = os.environ.get("QUARRY_HUB_WS", "ws://127.0.0.1:8001/ws")
 AGENT_NAME = os.environ.get("QUARRY_AGENT_NAME", "Inner")
 AGENT_LOCATION = os.environ.get("QUARRY_LOCATION", "Room A")
+HUB_RECONNECT_DELAY_S = 3
 
 _ws_loop = None
 _ws_conn = None
@@ -75,7 +85,8 @@ def _start_frame_server():
 def _start_hub_client():
     """Runs a websocket client to the Hub on its own event loop in a
     background thread, so the blocking cv2 loop in main() doesn't need to
-    become async. Joins as the real Inner Field Agent."""
+    become async. Joins as the real Inner Field Agent, and keeps
+    reconnecting if the connection drops (see module docstring)."""
 
     def runner():
         global _ws_loop
@@ -88,28 +99,30 @@ def _start_hub_client():
 
 async def _hub_client_main():
     global _ws_conn
-    try:
-        async with websockets.connect(HUB_WS) as ws:
-            _ws_conn = ws
-            await ws.send(json.dumps({
-                "type": "join", "name": AGENT_NAME, "role": "field_agent",
-                "location": AGENT_LOCATION, "site_role": "inner", "avatar": "\u25c8",
-            }))
-            reply = json.loads(await ws.recv())
-            if reply.get("type") == "join_rejected":
-                print(f"[Hub] join rejected: {reply.get('reason')} "
-                      f"-- is another Inner site already connected (e.g. simulate_squad.py --mode both)?")
+    while True:
+        try:
+            async with websockets.connect(HUB_WS) as ws:
+                _ws_conn = ws
+                await ws.send(json.dumps({
+                    "type": "join", "name": AGENT_NAME, "role": "field_agent",
+                    "location": AGENT_LOCATION, "site_role": "inner", "avatar": "\u25c8",
+                }))
+                reply = json.loads(await ws.recv())
+                if reply.get("type") == "join_rejected":
+                    print(f"[Hub] join rejected: {reply.get('reason')} "
+                          f"-- is another Inner site already connected (e.g. simulate_squad.py --mode both)?")
+                    _ws_ready.set()
+                    return  # rejection is a config problem, not a transient drop -- don't loop forever on it
+                print(f"[Hub] joined as Inner Field Agent '{AGENT_NAME}' -- "
+                      f"SPACE captures will now appear live in Active Sightings.")
                 _ws_ready.set()
-                return
-            print(f"[Hub] joined as Inner Field Agent '{AGENT_NAME}' -- "
-                  f"SPACE captures will now appear live in Active Sightings.")
-            _ws_ready.set()
-            async for _ in ws:  # drain incoming (votes, chat, etc.) so the socket doesn't back up
-                pass
-    except Exception as e:
-        print(f"[Hub] could not connect to {HUB_WS} ({e})")
-        print("[Hub] detection will still run and print locally, but nothing will reach the frontend.")
+                async for _ in ws:  # drain incoming (votes, chat, etc.) so the socket doesn't back up
+                    pass
+        except Exception as e:
+            print(f"[Hub] connection lost/failed ({e}) -- retrying in {HUB_RECONNECT_DELAY_S}s...")
+        _ws_conn = None
         _ws_ready.set()
+        await asyncio.sleep(HUB_RECONNECT_DELAY_S)
 
 
 def _send_candidate_report(payload):
