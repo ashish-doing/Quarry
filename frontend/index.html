@@ -842,7 +842,11 @@ let feedRefreshTimer = null;
 // Spectator watching a Field Agent's robot can't reach this feed yet, that
 // needs a real tunnel (ngrok or similar) which isn't built. Left honest
 // rather than faked.
-const LOCAL_FRAME_SERVER = "http://127.0.0.1:8099/latest.jpg";
+
+function localFrameServerUrl(site) {
+  const port = site.role === "inner" ? 8098 : 8099;
+  return `http://127.0.0.1:${port}/latest.jpg`;
+}
 
 // Cyberwave Twin View -- a scoped, expiring "Share Link" (Viewer role only),
 // generated from Studio's Share modal -> Share Links section, NOT the
@@ -868,11 +872,11 @@ function stopFeedRefresh() {
 
 function renderFeedStage(site) {
   if (activeFeedTab === "real") {
-    $("feed-video").innerHTML = `<img id="feed-img" src="${LOCAL_FRAME_SERVER}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+    $("feed-video").innerHTML = `<img id="feed-img" src="${localFrameServerUrl(site)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
       <div class="feed-empty" style="position:absolute; inset:0; display:none;">No local feed reachable — is the relay process running on this machine?</div>`;
     feedRefreshTimer = setInterval(() => {
       const img = document.getElementById("feed-img");
-      if (img) img.src = `${LOCAL_FRAME_SERVER}?t=${Date.now()}`;
+      if (img) img.src = `${localFrameServerUrl(site)}?t=${Date.now()}`;
     }, 300);
   } else if (TWIN_VIEW_URL) {
     // sandbox: allow-scripts + allow-same-origin are both required for
@@ -1149,6 +1153,10 @@ function connect() {
           openSightings.set(c.id, { data: c, confirms: 0, disputes: 0 })));
         renderSightings();
         renderProofGallery();
+        if (myRole === "spectator") {
+          const innerSite = Object.entries(sites).find(([, s]) => s.role === "inner");
+          if (innerSite) sendFollow(innerSite[0]);
+        }
         playDropSequence();
         break;
 
