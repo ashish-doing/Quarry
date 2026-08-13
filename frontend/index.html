@@ -828,7 +828,15 @@ function renderArenaMarkers() {
   if (followingSiteId) highlightFollowed(followingSiteId);
 }
 
+/* Only Spectators watch feeds -- Field Agents are busy running their own
+   robot, and a field agent "following" (and thereby broadcasting a watch
+   event for) their OWN site was the root cause of the confusing
+   "X is now watching X's feed" activity/log entries. This single guard
+   covers both entry points into following: the 3D arena marker click AND
+   the Squad panel's fallback FOLLOW button (see renderSquad below, which
+   also hides the button from non-spectators so there's nothing to click). */
 function sendFollow(siteId) {
+  if (myRole !== "spectator") return;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   followingSiteId = siteId;
   ws.send(JSON.stringify({ type: "follow", site_id: siteId }));
@@ -949,7 +957,10 @@ function renderSquad() {
     // arena -- but that arena needs WebGL, which isn't guaranteed (see
     // arenaAvailable). This FOLLOW button is the fallback path so a site can
     // always be picked even when the 3D view can't render, not just a nicety.
-    const canFollow = ownSite && p.role === "field_agent";
+    // Gated to `myRole === "spectator"` (the VIEWER's role, not the row's
+    // owner's role) so a Field Agent never sees a FOLLOW button on their own
+    // row -- that was the bug: agents could follow/watch their own feed.
+    const canFollow = myRole === "spectator" && ownSite && p.role === "field_agent";
     const isFollowing = canFollow && ownSite.site_id === followingSiteId;
     const followBtn = canFollow
       ? `<button class="squad-follow-btn${isFollowing ? " active" : ""}" data-site="${ownSite.site_id}">${isFollowing ? "FOLLOWING" : "FOLLOW"}</button>`
