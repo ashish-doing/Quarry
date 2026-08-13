@@ -45,12 +45,23 @@
 
 ---
 
+## 🔗 Important Links
+
+- 🚀 [Pitch deck](https://ashish-doing.github.io/Quarry/pitch/)
+- 📖 [Mission story](https://ashish-doing.github.io/Quarry/mission-story/)
+- 🎬 [Demo video](https://youtu.be/jpq3vNUF4XY)
+- 📐 [Architecture deep dive](./ARCHITECTURE.md)
+- 📍 [Known limitations](#known-limitations--what-this-honestly-cannot-do-yet)
+- 💻 [Repository](https://github.com/ashish-doing/Quarry)
+
+---
+
 ## 📸 Screenshots
 
 | | |
 |---|---|
 | ![Arena](docs/screenshots/arena.jpeg) | ![Camera calibration](docs/screenshots/calibration.png) |
-| **Taped arena** — all 8 numbered objects laid out, Orion visible bottom-right | **Camera calibration** — `calibrate_camera.py`'s fisheye checkerboard capture, 10/12+ frames |
+| **Taped arena** — all 8 numbered objects laid out, Orion visible bottom-right | **Camera calibration** — `calibrate_camera.py`'s fisheye checkerboard capture. Reprojection error came back too high at the venue, so autonomous AprilTag navigation was abandoned for this run — captured here, not hidden |
 | ![Cyberwave twin scene](docs/screenshots/twin-scene.png) | ![Mission Control HUD](docs/screenshots/mission-control.png) |
 | **QUARRY_DEMO twin scene** — CoreZone/HuntZone, decoy objects, outer UGV slots modeled in Cyberwave's workbench | **Mission Control HUD** — live sighting with CV shape/color, OCR read, twin claim, and confirm/dispute vote |
 
