@@ -1,24 +1,31 @@
 """
-Simulates the INNER field agent (your real UGV's site) reporting one
-detection, and an OUTER field agent (a second player -- you only have one
+Simulates the OUTER field agent (a second player -- you only have one
 robot tonight, so this stands in for it) reporting an intruder alert.
 
-This does NOT invent votes or confirmations -- those still have to come
-from real browser tabs joined as Spectators, clicking Confirm, so the
-demo stays honest: the detection is scripted (no second robot), but the
-human-in-the-loop verification is real and live.
+The INNER site is now the REAL one: manual_cv_demo.py connects to the
+Hub itself and posts live candidate_reports from actual SPACE captures
+on your robot's camera. This script used to also simulate an "Inner"
+site, but the Hub only allows one Inner site per session ("one per
+session" per the role description) -- so by default this script now
+only runs the outer_agent, to avoid colliding with the real inner join.
+
+Use --mode both only as a FALLBACK: if manual_cv_demo.py can't reach the
+Hub for some reason, this restores the old fully-scripted single-object
+sighting so the vote demo still works.
 
 Run this AFTER `uvicorn backend.main:app --port 8001` is already running.
-Keep this script running (don't Ctrl+C) so the two field-agent sites stay
-"online" in the Squad panel while you record.
+Keep this script running (don't Ctrl+C) so the outer site stays "online"
+in the Squad panel while you record.
 """
+import argparse
 import asyncio
 import json
 import websockets
 
 HUB = "ws://127.0.0.1:8001/ws"
 
-# --- EDIT THESE THREE LINES to match one of your actually registered objects ---
+# --- EDIT THESE THREE LINES to match one of your actually registered objects
+#     (only used if you run with --mode inner or --mode both) ---
 OBJECT_LABEL = "object-08"      # must match a target_name in objects_config.json
 OBJECT_SHAPE_COLOR = ("cone", "pink")
 OBJECT_WAYPOINT = "W3"
@@ -80,8 +87,22 @@ async def outer_agent():
             await asyncio.sleep(10)
 
 
-async def main():
-    await asyncio.gather(inner_agent(), outer_agent())
+async def main(mode):
+    tasks = []
+    if mode in ("inner", "both"):
+        tasks.append(inner_agent())
+    if mode in ("outer", "both"):
+        tasks.append(outer_agent())
+    await asyncio.gather(*tasks)
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--mode", choices=["inner", "outer", "both"], default="outer",
+        help="default 'outer' -- manual_cv_demo.py is now the live Inner site, "
+             "so this only runs the scripted Outer/intruder-alert stand-in. "
+             "Use 'both' as a fallback if manual_cv_demo.py can't reach the Hub.",
+    )
+    args = parser.parse_args()
+    asyncio.run(main(args.mode))
