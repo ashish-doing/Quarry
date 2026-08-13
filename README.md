@@ -8,6 +8,8 @@
 
 <div align="center">
 
+[![Pitch](https://img.shields.io/badge/🚀%20PITCH-VIEW-38BDF8?style=for-the-badge)](https://ashish-doing.github.io/Quarry/pitch/)
+[![Story](https://img.shields.io/badge/📖%20MISSION%20STORY-READ-38BDF8?style=for-the-badge)](https://ashish-doing.github.io/Quarry/mission-story/)
 [![Architecture](https://img.shields.io/badge/📐%20ARCHITECTURE-DEEP%20DIVE-4ADE80?style=for-the-badge)](./ARCHITECTURE.md)
 [![Quick Start](https://img.shields.io/badge/⚡%20QUICK%20START-GO-4ADE80?style=for-the-badge)](#quick-start)
 [![Limitations](https://img.shields.io/badge/📍%20HONEST%20LIMITS-READ-F5A623?style=for-the-badge)](#known-limitations--what-this-honestly-cannot-do-yet)
@@ -37,9 +39,9 @@
 
 ## 🎬 Demo Video
 
-[![QUARRY Demo](https://img.shields.io/badge/▶️%20WATCH%20THE%20DEMO-YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](#)
+[![QUARRY Demo](https://img.youtube.com/vi/jpq3vNUF4XY/maxresdefault.jpg)](https://youtu.be/jpq3vNUF4XY)
 
-> *Demo video link goes here once recorded — see [`demo_video_shot_list.md`](./demo_video_shot_list.md) for the exact shot-by-shot plan (3:00 hard cap, currently scripted to 2:50).*
+▶️ [Watch the demo on YouTube](https://youtu.be/jpq3vNUF4XY)
 
 ---
 
@@ -48,11 +50,9 @@
 | | |
 |---|---|
 | ![Arena](docs/screenshots/arena.jpeg) | ![Camera calibration](docs/screenshots/calibration.png) |
-| **Taped arena** — all 8 numbered objects laid out, Orion visible bottom-right | **Camera calibration in progress** — `calibrate_camera.py`'s checkerboard capture |
-| ![Cyberwave twin scene](docs/screenshots/twin-scene.png) | *`docs/screenshots/screenshot-missioncontrol.png`* |
-| **QUARRY_DEMO twin scene** — CoreZone/HuntZone, decoy objects, outer UGV slots modeled in Cyberwave's workbench | **Mission Control HUD** — live telemetry + sightings panel *(not yet committed)* |
-| *`docs/screenshots/screenshot-capture.png`* | *`docs/screenshots/screenshot-proofgallery.png`* |
-| **Capture close-up** — object + printed marker number, readable in frame *(not yet committed)* | **Proof gallery** — confirmed objects with location offset + OCR result *(not yet committed)* |
+| **Taped arena** — all 8 numbered objects laid out, Orion visible bottom-right | **Camera calibration** — `calibrate_camera.py`'s fisheye checkerboard capture, 10/12+ frames |
+| ![Cyberwave twin scene](docs/screenshots/twin-scene.png) | ![Mission Control HUD](docs/screenshots/mission-control.png) |
+| **QUARRY_DEMO twin scene** — CoreZone/HuntZone, decoy objects, outer UGV slots modeled in Cyberwave's workbench | **Mission Control HUD** — live sighting with CV shape/color, OCR read, twin claim, and confirm/dispute vote |
 
 ---
 
