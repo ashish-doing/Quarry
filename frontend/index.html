@@ -135,6 +135,9 @@ button { font-family: inherit; }
 .role-pill.outer { border: 1px solid #1c5a86; color: var(--blue); }
 .role-pill.spectator { border: 1px solid var(--border); color: var(--text-faint); }
 .conn-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+.squad-follow-btn { font-family: var(--font-mono); font-size: 7.5px; letter-spacing: 0.5px; padding: 3px 6px; border-radius: 3px; border: 1px solid var(--border-soft); background: transparent; color: var(--text-dim); cursor: pointer; flex-shrink: 0; margin-right: 4px; }
+.squad-follow-btn:hover { border-color: var(--green-dim); color: var(--green); }
+.squad-follow-btn.active { border-color: var(--green-dim); color: var(--green); background: rgba(74,222,128,0.08); }
 .conn-dot.offline { background: var(--text-faint); }
 
 .activity-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
@@ -830,6 +833,7 @@ function sendFollow(siteId) {
   followingSiteId = siteId;
   ws.send(JSON.stringify({ type: "follow", site_id: siteId }));
   renderFeedPanel();
+  renderSquad(); // updates the FOLLOW/FOLLOWING button state on the picked row
   if (arenaAvailable) highlightFollowed(siteId);
 }
 
@@ -937,6 +941,15 @@ function renderSquad() {
     const pillText = p.role === "field_agent" ? (siteRole === "inner" ? "INNER" : "OUTER") : "SPEC";
     const row = document.createElement("div");
     row.className = "squad-row";
+    // Following a site normally happens by clicking its marker in the 3D
+    // arena -- but that arena needs WebGL, which isn't guaranteed (see
+    // arenaAvailable). This FOLLOW button is the fallback path so a site can
+    // always be picked even when the 3D view can't render, not just a nicety.
+    const canFollow = ownSite && p.role === "field_agent";
+    const isFollowing = canFollow && ownSite.site_id === followingSiteId;
+    const followBtn = canFollow
+      ? `<button class="squad-follow-btn${isFollowing ? " active" : ""}" data-site="${ownSite.site_id}">${isFollowing ? "FOLLOWING" : "FOLLOW"}</button>`
+      : "";
     row.innerHTML = `
       <span class="avatar-badge">${p.avatar || "◈"}</span>
       <div class="squad-row-info">
@@ -946,9 +959,13 @@ function renderSquad() {
           ${p.location ? p.location : ""}
         </div>
       </div>
+      ${followBtn}
       <span class="conn-dot ${p.connected ? "" : "offline"}"></span>
     `;
     list.appendChild(row);
+  });
+  list.querySelectorAll(".squad-follow-btn").forEach((btn) => {
+    btn.addEventListener("click", () => sendFollow(btn.dataset.site));
   });
 }
 
