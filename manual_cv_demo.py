@@ -27,9 +27,10 @@ once -- the earlier one-shot version would silently and permanently drop
 out of the Hub on the first disconnect (observed happening ~11s after
 join, most likely a ping/pong timeout caused by the blocking cv2 loop
 holding the GIL long enough that the background asyncio thread can't
-service the websocket in time). This is a band-aid, not a fix for that
-underlying timeout -- but it means Inner comes back on its own instead
-of requiring you to notice and restart the script mid-demo.
+service the websocket in time). FIXED below by raising ping_timeout to
+90s instead of relying on the default 20s -- the auto-reconnect loop is
+kept as a second line of defense for genuine drops (Hub restart, network
+blip), not as the primary fix anymore.
 """
 import os
 import base64
@@ -101,7 +102,15 @@ async def _hub_client_main():
     global _ws_conn
     while True:
         try:
-            async with websockets.connect(HUB_WS) as ws:
+            # ping_timeout bumped way up (default is 20s) -- the main thread's
+            # cv2.imshow()/cv2.waitKey() loop holds the GIL long enough under
+            # load that the background asyncio thread sometimes can't answer
+            # a ping in time, which the websockets lib treats as a dead
+            # connection and closes it. That's a GIL scheduling hiccup, not
+            # an actually-dead link, so give it much more slack instead of
+            # tightening the loop's timing (which we don't fully control on
+            # Windows where cv2's GUI event pump is the actual culprit).
+            async with websockets.connect(HUB_WS, ping_interval=20, ping_timeout=90) as ws:
                 _ws_conn = ws
                 await ws.send(json.dumps({
                     "type": "join", "name": AGENT_NAME, "role": "field_agent",
