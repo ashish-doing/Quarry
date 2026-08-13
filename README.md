@@ -52,7 +52,6 @@
 - 🎬 [Demo video](https://youtu.be/jpq3vNUF4XY)
 - 📐 [Architecture deep dive](./ARCHITECTURE.md)
 - 📍 [Known limitations](#known-limitations--what-this-honestly-cannot-do-yet)
-- 💻 [Repository](https://github.com/ashish-doing/Quarry)
 
 ---
 
