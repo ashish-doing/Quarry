@@ -26,6 +26,8 @@ captures/
 *.jpeg
 !frontend/**/*.jpg
 !frontend/**/*.jpeg
+!docs/**/*.jpg
+!docs/**/*.jpeg
 test_frame.jpg
 confirm_frame.jpg
 
