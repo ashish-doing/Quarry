@@ -43,6 +43,10 @@ Server -> Client:
   {"type": "join_rejected", "reason"}
   {"type": "activity", "text", "kind", "timestamp"}
   {"type": "site_update", "site_id", "telemetry"}
+  {"type": "site_frame", "site_id", "image"}  (base64 JPEG, sent only to that
+   site's current followers -- see send_to_followers(); this is the live
+   REAL FEED video, distinct from candidate `image`, which is one proof
+   photo per confirmed sighting, not a video stream)
   {"type": "candidate", "site_id", "id", "label", "confidence",
    "instant_confidence", "waypoint", "is_registered_target", "timestamp",
    "location_offset", "ocr_number", "ocr_anomaly", "image",
@@ -63,8 +67,11 @@ Server -> Client:
 
 Client -> Server:
   {"type": "join", "name", "role" ("field_agent"|"spectator"),
-   "site_role" ("inner"|"outer", field_agent only), "location", "avatar"}
+   "site_role" ("inner"|"outer", field_agent only), "location", "avatar",
+   "code"}   ("code" only required/checked if QUARRY_JOIN_CODE is set on the
+   Hub -- see JOIN_CODE below)
   {"type": "site_report", "waypoints", "telemetry"}    (field agent's own relay process only)
+  {"type": "frame", "image"}                             (field agent only -- live video frame)
   {"type": "candidate_report", "label", "confidence", "instant_confidence",
    "waypoint", "is_registered_target", "location_offset", "ocr_number",
    "ocr_anomaly", "image", "twin_semantic_label"}       (field agent only)
@@ -84,6 +91,7 @@ existing cooldown/smoothing logic in real_feed.py), never per-tick.
 """
 
 import json
+import os
 import re
 import time
 import uuid
@@ -100,6 +108,14 @@ load_dotenv()
 
 app = FastAPI(title="QUARRY Mission Control -- Hub")
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+
+# Session access code -- gates who can join once this Hub is hosted somewhere
+# public. Unset (default) means no gate, matching every prior local/demo run
+# exactly -- this is opt-in, never a behavior change unless you set it.
+# Set on your host as an env var and hand the same value out as "the code"
+# to whoever you want able to join. Compared case-sensitively, on purpose --
+# don't silently .lower() a code someone might paste with real casing.
+JOIN_CODE = os.environ.get("QUARRY_JOIN_CODE", "").strip()
 
 CONFIRM_THRESHOLD = 2
 DISPUTE_THRESHOLD = 2   # symmetric to CONFIRM_THRESHOLD, see the vote handler
@@ -285,6 +301,29 @@ async def broadcast_presence():
     await broadcast({"type": "presence", "players": [p.to_dict() for p in hub.players.values()]})
 
 
+async def send_to_followers(site_id: str, message: dict):
+    """Unlike broadcast(), only reaches players currently following this
+    specific site -- video frames are the one message type in this
+    contract with real per-message bandwidth cost, so this deliberately
+    doesn't fan out to everyone connected, only to whoever actually has
+    that site's feed open right now. site.followers stores player NAMES
+    (see the 'follow' handler below), so this does one pass over
+    connected players matching by name -- fine at this player count,
+    would want an index if that ever grows much past a few dozen."""
+    site = hub.sites.get(site_id)
+    if not site or not site.followers:
+        return
+    dead = []
+    for ws, player in list(hub.players.items()):
+        if player.name in site.followers:
+            try:
+                await ws.send_text(json.dumps(message))
+            except Exception:
+                dead.append(ws)
+    for ws in dead:
+        hub.players.pop(ws, None)
+
+
 async def log_activity(text: str, kind: str = "info"):
     entry = {"type": "activity", "text": text, "kind": kind,
               "timestamp": datetime.now(timezone.utc).isoformat()}
@@ -313,6 +352,11 @@ async def ws_endpoint(websocket: WebSocket):
                 avatar = (msg.get("avatar") or "\u25c8").strip()[:4]
                 site_role = msg.get("site_role") if msg.get("site_role") in SITE_ROLES else None
 
+                if JOIN_CODE and (msg.get("code") or "").strip() != JOIN_CODE:
+                    await websocket.send_text(json.dumps({
+                        "type": "join_rejected", "reason": "Wrong or missing session code."
+                    }))
+                    continue
                 if not name:
                     await websocket.send_text(json.dumps({"type": "join_rejected", "reason": "Name required."}))
                     continue
@@ -357,6 +401,21 @@ async def ws_endpoint(websocket: WebSocket):
                     site.waypoints = msg["waypoints"]
                 site.telemetry = msg.get("telemetry", {})
                 await broadcast({"type": "site_update", "site_id": site.site_id, "telemetry": site.telemetry})
+                continue
+
+            # Live camera frame -- field agent pushes one every ~150-250ms
+            # (their own throttling, not enforced here) instead of the old
+            # same-machine-only http://127.0.0.1:PORT/latest.jpg fetch. This
+            # is what makes REAL FEED work for a spectator who isn't on the
+            # same machine as the robot. Deliberately NOT added to
+            # rate_limited()'s bucket below -- that limiter is sized for
+            # human actions (vote/ping/chat), a video-rate sender would
+            # blow through it immediately and get itself throttled for
+            # doing exactly what it's supposed to do.
+            if msg_type == "frame" and player.role == "field_agent" and player.site_id:
+                await send_to_followers(player.site_id, {
+                    "type": "site_frame", "site_id": player.site_id, "image": msg.get("image"),
+                })
                 continue
 
             if msg_type == "candidate_report" and player.role == "field_agent" and player.site_id:

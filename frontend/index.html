@@ -312,6 +312,7 @@ button { font-family: inherit; }
     </div>
 
     <input type="text" id="join-location" placeholder="Your location (e.g. Berlin, DE)" class="hidden">
+    <input type="text" id="join-code" placeholder="Session code (if you were given one)" autocomplete="off">
     <div id="join-error" class="join-error hidden"></div>
     <button id="join-btn">DROP IN</button>
   </div>
@@ -706,9 +707,11 @@ $("join-btn").addEventListener("click", () => {
   if (myRole === "field_agent" && !location) { $("join-location").focus(); return; }
 
   myName = name;
+  const code = $("join-code").value.trim();
   const doJoin = () => ws.send(JSON.stringify({
     type: "join", name, role: myRole, site_role: mySiteRole || undefined, avatar: myAvatar,
     location: myRole === "field_agent" ? location : undefined,
+    code,
   }));
   if (ws && ws.readyState === WebSocket.OPEN) doJoin();
   else if (ws) ws.addEventListener("open", doJoin, { once: true });
@@ -857,20 +860,15 @@ function sendFollow(siteId) {
   if (arenaAvailable) highlightFollowed(siteId);
 }
 
-let feedRefreshTimer = null;
-// Same-machine-only, by design -- see README's "Known Limitations": a remote
-// Spectator watching a Field Agent's robot can't reach this feed yet, that
-// needs a real tunnel (ngrok or similar) which isn't built. Left honest
-// rather than faked.
-
-// Inner (manual_cv_demo.py) serves its annotated frame on 8098; Outer
-// (site_agent.py) serves on 8099. Confirmed against manual_cv_demo.py's
-// own FRAME_SERVER_PORT constant and comment ("matches inner_agent.py's
-// port -- frontend expects this for 'inner' sites").
-function localFrameServerUrl(site) {
-  const port = site.role === "inner" ? 8098 : 8099;
-  return `http://127.0.0.1:${port}/latest.jpg`;
-}
+// Live camera frames, keyed by site_id -- populated by "site_frame" WS
+// messages (see ws.onmessage below), NOT fetched from a local HTTP port
+// anymore. This is what makes REAL FEED work for a spectator who isn't on
+// the same machine as the field agent: the field agent (inner_agent.py /
+// site_agent.py) pushes each frame up through the same WebSocket
+// connection it already has open to the Hub, the Hub relays it only to
+// that site's current followers (see main.py's send_to_followers()), and
+// this object just holds whatever arrived most recently per site.
+let liveFrames = {};
 
 // Cyberwave Twin View -- a scoped, expiring "Share Link" (Viewer role only),
 // generated from Studio's Share modal -> Share Links section, NOT the
@@ -896,18 +894,17 @@ const TWIN_VIEW_URL = "https://cyberwave.com/environments/9383b6b2-0df7-4e99-8d9
 let lastFeedKey = null;
 
 function stopFeedRefresh() {
-  if (feedRefreshTimer) clearInterval(feedRefreshTimer);
-  feedRefreshTimer = null;
+  // No-op now that REAL FEED is push-based (WS "site_frame") instead of a
+  // polled HTTP fetch -- kept as a function so renderFeedPanel() below
+  // doesn't need to change its call sites.
 }
 
 function renderFeedStage(site) {
   if (activeFeedTab === "real") {
-    $("feed-video").innerHTML = `<img id="feed-img" src="${localFrameServerUrl(site)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-      <div class="feed-empty" style="position:absolute; inset:0; display:none;">No local feed reachable — is the relay process running on this machine?</div>`;
-    feedRefreshTimer = setInterval(() => {
-      const img = document.getElementById("feed-img");
-      if (img) img.src = `${localFrameServerUrl(site)}?t=${Date.now()}`;
-    }, 300);
+    const cached = liveFrames[site.site_id];
+    $("feed-video").innerHTML = cached
+      ? `<img id="feed-img" src="data:image/jpeg;base64,${cached}">`
+      : `<div class="feed-empty">Waiting for live video from ${site.owner}'s site…<span class="twin-badge">no frame received yet — confirm their field agent script is running and connected</span></div>`;
   } else if (TWIN_VIEW_URL) {
     // sandbox: allow-scripts + allow-same-origin are both required for
     // Cyberwave's viewer to render at all (it's a full app, not a static
@@ -1267,6 +1264,18 @@ function connect() {
         }
         break;
       }
+
+      case "site_frame":
+        liveFrames[msg.site_id] = msg.image;
+        if (msg.site_id === followingSiteId && activeFeedTab === "real") {
+          const img = document.getElementById("feed-img");
+          if (img) {
+            img.src = `data:image/jpeg;base64,${msg.image}`;
+          } else if (sites[followingSiteId]) {
+            renderFeedStage(sites[followingSiteId]);  // first frame for this site -- build the <img> now
+          }
+        }
+        break;
 
       case "followers_update":
         if (sites[msg.site_id]) sites[msg.site_id].followers = msg.followers;

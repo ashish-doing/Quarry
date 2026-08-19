@@ -59,6 +59,39 @@ load_dotenv()
 FRAME_SERVER_PORT = 8099
 _latest_jpeg = None  # shared between the detection loop and the HTTP thread
 
+# -- live WS frame relay -- same mechanism as inner_agent.py, see that
+# file's comment for the full reasoning. This is what makes REAL FEED work
+# for a spectator who isn't on the same machine as this outer UGV.
+FRAME_RELAY_INTERVAL_S = 0.2
+FRAME_RELAY_MAX_DIM = 640
+_last_frame_relay_at = 0.0
+
+
+def _encode_relay_frame(bgr) -> "str | None":
+    h, w = bgr.shape[:2]
+    scale = min(1.0, FRAME_RELAY_MAX_DIM / max(h, w))
+    if scale < 1.0:
+        bgr = cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    if not ok:
+        return None
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
+async def _maybe_relay_frame(ws, bgr):
+    global _last_frame_relay_at
+    now = time.monotonic()
+    if now - _last_frame_relay_at < FRAME_RELAY_INTERVAL_S:
+        return
+    _last_frame_relay_at = now
+    encoded = _encode_relay_frame(bgr)
+    if encoded is None:
+        return
+    try:
+        await ws.send(json.dumps({"type": "frame", "image": encoded}))
+    except Exception as exc:  # noqa: BLE001 -- a dropped frame must never kill the relay loop
+        print(f"[Hub] frame relay send failed ({exc}) -- will retry next tick")
+
 TRAINING_DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "training_data")
 PENDING_CROP_MAXLEN = 20  # not-yet-echoed-by-the-Hub crops kept in memory; old
                            # unmatched entries just age out if a broadcast is lost
@@ -221,7 +254,7 @@ def _start_frame_server():
           f"that needs the still-pending ngrok/tunnel work)")
 
 
-async def run(hub_url: str, name: str, location: str, site_role: str):
+async def run(hub_url: str, name: str, location: str, site_role: str, code: str = ""):
     real_feed.state.connect()
     print(f"Connected to your own twin. Relaying to Hub as {site_role.title()} "
           f"Field Agent '{name}' ({location}).")
@@ -230,7 +263,7 @@ async def run(hub_url: str, name: str, location: str, site_role: str):
     async with websockets.connect(hub_url) as ws:
         await ws.send(json.dumps({
             "type": "join", "name": name, "role": "field_agent",
-            "location": location, "site_role": site_role,
+            "location": location, "site_role": site_role, "code": code,
         }))
 
         init_raw = await ws.recv()
@@ -307,6 +340,7 @@ async def run(hub_url: str, name: str, location: str, site_role: str):
                     if ok:
                         global _latest_jpeg
                         _latest_jpeg = buf.tobytes()
+                    await _maybe_relay_frame(ws, annotated)
 
             # -- intruder watch: this is the core of the outer-UGV role.
             # Independent of candidate-raising below -- fires its own
@@ -352,6 +386,8 @@ if __name__ == "__main__":
                               "sequential survey. --role inner is accepted here only for flexibility "
                               "(e.g. relaying an inner UGV that's being driven by a separate teleop.py "
                               "session rather than inner_agent.py's own driving loop).")
+    parser.add_argument("--code", default="", help="Session join code, only needed if the Hub "
+                                                     "has QUARRY_JOIN_CODE set.")
     args = parser.parse_args()
 
-    asyncio.run(run(args.hub, args.name, args.location, args.role))
+    asyncio.run(run(args.hub, args.name, args.location, args.role, code=args.code))
