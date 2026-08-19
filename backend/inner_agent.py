@@ -78,6 +78,51 @@ _latest_jpeg = None
 
 PROOF_IMAGE_MAX_DIM = 480
 
+# -- live WS frame relay (what a REMOTE spectator's REAL FEED tab actually
+# uses now) -- FRAME_SERVER_PORT above still runs too, but only helps a
+# same-machine viewer. This is throttled independently of the detection
+# tick rate: sending a frame every single detection tick (every 0.2-0.3s
+# during scanning) is already close to fine, but during DRIVING ticks
+# (_drive_to_target) there was no frame capture happening at all before --
+# that's the "feed frozen while driving" gap this file also fixes below.
+FRAME_RELAY_INTERVAL_S = 0.2
+FRAME_RELAY_MAX_DIM = 640  # smaller than the proof-gallery crop's 480 cap on
+                             # the LONG side budget-wise, this is deliberately
+                             # bigger since it's the primary viewing image, not
+                             # a thumbnail -- but still downscaled, a raw frame
+                             # every 200ms uncapped would be a real bandwidth cost
+                             # once this is running over a real internet link
+_last_frame_relay_at = 0.0
+
+
+def _encode_relay_frame(bgr) -> Optional[str]:
+    h, w = bgr.shape[:2]
+    scale = min(1.0, FRAME_RELAY_MAX_DIM / max(h, w))
+    if scale < 1.0:
+        bgr = cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    if not ok:
+        return None
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
+async def _maybe_relay_frame(ws, bgr):
+    """Fire-and-forget-ish: throttled to FRAME_RELAY_INTERVAL_S regardless
+    of how often the caller captures, so a tight loop elsewhere doesn't
+    turn this into an uncapped-rate sender."""
+    global _last_frame_relay_at
+    now = time.monotonic()
+    if now - _last_frame_relay_at < FRAME_RELAY_INTERVAL_S:
+        return
+    _last_frame_relay_at = now
+    encoded = _encode_relay_frame(bgr)
+    if encoded is None:
+        return
+    try:
+        await ws.send(json.dumps({"type": "frame", "image": encoded}))
+    except Exception as exc:  # noqa: BLE001 -- a dropped frame must never kill the mission loop
+        print(f"[Hub] frame relay send failed ({exc}) -- will retry next tick")
+
 
 def _slugify(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "site"
@@ -138,12 +183,25 @@ async def _send_site_report(ws):
     }))
 
 
-async def _capture_and_annotate() -> Tuple[Optional[object], list]:
+async def _capture_and_annotate(ws=None) -> Tuple[Optional[object], list]:
     """One shared capture+detect for driving ticks and scan ticks alike --
-    also updates the local annotated-feed JPEG. Returns (frame, detections)."""
+    also updates the local annotated-feed JPEG AND relays it live over the
+    Hub WebSocket (when ws is given) so REAL FEED stays live the whole
+    time, not just during the 3s scan window at each object. Returns
+    (frame, detections). If the detector or camera isn't available, still
+    tries to relay a plain (unannotated) frame -- a live feed with no
+    detection boxes is still a live feed, better than nothing."""
     global _latest_jpeg
     frame = real_feed.state._capture_frame()
-    if frame is None or not real_feed.state.detector.available:
+    if frame is None:
+        return None, []
+    if not real_feed.state.detector.available:
+        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        ok, buf = cv2.imencode(".jpg", bgr)
+        if ok:
+            _latest_jpeg = buf.tobytes()
+        if ws is not None:
+            await _maybe_relay_frame(ws, bgr)
         return frame, []
     frame = real_feed.state.detector.normalize_frame(frame)
     if frame is None:
@@ -154,6 +212,8 @@ async def _capture_and_annotate() -> Tuple[Optional[object], list]:
     ok, buf = cv2.imencode(".jpg", annotated)
     if ok:
         _latest_jpeg = buf.tobytes()
+    if ws is not None:
+        await _maybe_relay_frame(ws, annotated)
     return frame, detections
 
 
@@ -161,6 +221,7 @@ async def _drive_to_target(ws, twin, guard: CollisionGuard, target_xy: Tuple[flo
                             heading_estimate: Optional[Tuple[float, float]]):
     for _tick in range(MAX_TICKS_PER_TARGET):
         await _send_site_report(ws)
+        await _capture_and_annotate(ws)  # keeps REAL FEED live while driving, not just while scanning
 
         if guard.blocked:
             await asyncio.sleep(0.5)
@@ -202,22 +263,40 @@ async def _drive_to_target(ws, twin, guard: CollisionGuard, target_xy: Tuple[flo
     return None
 
 
-async def run(hub_url: str, name: str, location: str):
+async def _run_feed_only(ws, guard: CollisionGuard):
+    """No survey, no driving, no candidate-raising -- just continuously
+    capture, annotate, relay to the Hub, and report telemetry, forever.
+    This is the whole point: verifying the camera feed itself reaches the
+    frontend live, with zero coupling to whether the sequential-object
+    logic below it works, is configured, or is even ready yet. Retires
+    the old stream_feed.py / manual_cv_demo.py / simulate_squad.py trio
+    for this specific purpose -- one real script, one real mode, instead
+    of three parallel throwaway ones."""
+    print("Feed-only mode: relaying camera + telemetry, no autonomous driving, no survey. Ctrl+C to stop.")
+    while True:
+        await _send_site_report(ws)
+        await _capture_and_annotate(ws)
+        await asyncio.sleep(real_feed.TELEMETRY_TICK_S)
+
+
+async def run(hub_url: str, name: str, location: str, feed_only: bool = False, code: str = ""):
     real_feed.state.connect()
     twin = real_feed.state.twin
     objects = load_objects()
     _start_frame_server()
 
-    if not objects:
-        print("No objects in objects_config.json -- nothing to survey. See objects_registry.py.")
-        return
-    if not real_feed.state.ocr.available:
-        print("[WARN] Tesseract unavailable -- proceeding WITHOUT OCR cross-check.")
+    if not feed_only:
+        if not objects:
+            print("No objects in objects_config.json -- nothing to survey. See objects_registry.py. "
+                  "(Pass --feed-only if you just want the camera feed, not the survey.)")
+            return
+        if not real_feed.state.ocr.available:
+            print("[WARN] Tesseract unavailable -- proceeding WITHOUT OCR cross-check.")
 
     async with websockets.connect(hub_url) as ws:
         await ws.send(json.dumps({
             "type": "join", "name": name, "role": "field_agent",
-            "location": location, "site_role": "inner",
+            "location": location, "site_role": "inner", "code": code,
         }))
         init_raw = await ws.recv()
         init = json.loads(init_raw)
@@ -233,6 +312,17 @@ async def run(hub_url: str, name: str, location: str):
             }))),
         )
         asyncio.create_task(guard.run())
+
+        if feed_only:
+            try:
+                await _run_feed_only(ws, guard)
+            except KeyboardInterrupt:
+                print("\nStopping inner agent (feed-only mode)...")
+                try:
+                    twin.publish_command("stop", {})
+                except Exception:  # noqa: BLE001 -- best-effort stop on exit
+                    pass
+            return
 
         print(f"Sequential survey started -- {len(objects)} object(s) in order: "
               f"{[o.number for o in objects]}. Ctrl+C to stop.")
@@ -257,7 +347,7 @@ async def run(hub_url: str, name: str, location: str):
                 scan_until = time.monotonic() + SCAN_PAUSE_S
                 confirmed_this_object = False
                 while time.monotonic() < scan_until:
-                    frame, detections = await _capture_and_annotate()
+                    frame, detections = await _capture_and_annotate(ws)
 
                     # Inner UGV can spot an intruder too, same as outer --
                     # checked every scan tick using the frame already captured.
@@ -327,6 +417,7 @@ async def run(hub_url: str, name: str, location: str):
             # mid-demo just because the object sequence finished.
             while True:
                 await _send_site_report(ws)
+                await _capture_and_annotate(ws)
                 await asyncio.sleep(real_feed.TELEMETRY_TICK_S * 5)
 
         except KeyboardInterrupt:
@@ -342,6 +433,13 @@ if __name__ == "__main__":
     parser.add_argument("--hub", required=True, help="ws:// or wss:// URL of the Hub's /ws endpoint")
     parser.add_argument("--name", required=True)
     parser.add_argument("--location", required=True, help='e.g. "Room A" -- shown to everyone')
+    parser.add_argument("--feed-only", action="store_true",
+                         help="Just relay camera + telemetry, skip the autonomous sequential "
+                              "survey entirely. Use this to verify the live feed reaches the "
+                              "frontend without needing objects_config.json, target "
+                              "registration, or a real drive to be ready.")
+    parser.add_argument("--code", default="", help="Session join code, only needed if the Hub "
+                                                     "has QUARRY_JOIN_CODE set.")
     args = parser.parse_args()
 
-    asyncio.run(run(args.hub, args.name, args.location))
+    asyncio.run(run(args.hub, args.name, args.location, feed_only=args.feed_only, code=args.code))
