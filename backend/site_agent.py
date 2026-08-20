@@ -249,9 +249,9 @@ class _FrameHandler(BaseHTTPRequestHandler):
 def _start_frame_server():
     server = ThreadingHTTPServer(("0.0.0.0", FRAME_SERVER_PORT), _FrameHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    print(f"Annotated video feed: http://127.0.0.1:{FRAME_SERVER_PORT}/latest.jpg "
-          f"(SAME-MACHINE ONLY for now -- a remote spectator can't reach this yet, "
-          f"that needs the still-pending ngrok/tunnel work)")
+    print(f"Annotated video feed also available locally at http://127.0.0.1:{FRAME_SERVER_PORT}/latest.jpg "
+          f"(same-machine only -- remote spectators watch via the live WebSocket relay instead, "
+          f"see _maybe_relay_frame() above)")
 
 
 async def run(hub_url: str, name: str, location: str, site_role: str, code: str = ""):
